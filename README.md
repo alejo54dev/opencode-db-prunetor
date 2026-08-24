@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.2-blue)
+![Version](https://img.shields.io/badge/version-0.1.3-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
 
@@ -20,7 +20,7 @@
 
 - **Event pruning** — deletes event history from sessions you haven't touched in a while, then rebuilds indexes and refreshes planner statistics to keep everything fast.
 
-- **Ligero en vivo** — the database stays fully usable while the plugin works. No heavy compaction: the file keeps its size, the freed space is simply reused.
+- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist.
 
 ## 🧠 Philosophy
 
@@ -43,7 +43,8 @@ flowchart TD
     F --> G["🧹 Delete old events"]
     G --> H["🔧 Rebuild indexes"]
     H --> I["📊 Refresh planner stats"]
-    I --> L["🗑️ Remove backup<br/>(success)"]
+    I --> M["🗜️ Compact<br/>(VACUUM + WAL truncate)"]
+    M --> L["🗑️ Remove backup<br/>(success)"]
     R --> J["📋 Log report (sizes)"]
     L --> J
     J --> K["🔚 Close connection"]
@@ -57,6 +58,7 @@ flowchart TD
     style G fill:#0f3460,stroke:#53a8b6,color:#fff
     style H fill:#0f3460,stroke:#53a8b6,color:#fff
     style I fill:#0f3460,stroke:#53a8b6,color:#fff
+    style M fill:#0f3460,stroke:#53a8b6,color:#fff
     style L fill:#0f3460,stroke:#53a8b6,color:#fff
     style J fill:#1a1a2e,stroke:#e94560,color:#fff
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -121,9 +123,10 @@ tail -f ~/.config/opencode/db-prunetor.log
 [2026-08-23T22:15:02] [INFO]: Backup written: /home/alejo/.local/share/opencode/opencode.db.bak (1.17 GB)
 [2026-08-23T22:15:05] [INFO]: Pruned events: 454878
 [2026-08-23T22:15:06] [INFO]: Reindex + optimize done
-[2026-08-23T22:15:06] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
-[2026-08-23T22:15:06] [INFO]: Report — db: 1.17 GB, wal: 0.6 MB, shm: 32 KB, bak: absent
-[2026-08-23T22:15:06] [INFO]: Disposed
+[2026-08-23T22:15:07] [INFO]: Vacuum + wal checkpoint done
+[2026-08-23T22:15:07] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
+[2026-08-23T22:15:07] [INFO]: Report — db: 0.35 GB, wal: 0.6 MB, shm: 32 KB, bak: absent
+[2026-08-23T22:15:07] [INFO]: Disposed
 ```
 
 ## 💬 Notes
@@ -133,7 +136,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Snapshot before surgery** — a consistent backup is written to `<db_path>.bak` before anything is deleted, without locking the live database. On success it is removed automatically; on failure it stays as a restore point.
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days; its event history goes with it, while your messages stay intact.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
-- **Ligero en vivo** — no heavy compaction: the file keeps its size and the freed space is reused.
+- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close.
 
 Less is more. :)
 
@@ -144,4 +147,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.2
+MIT — version 0.1.3

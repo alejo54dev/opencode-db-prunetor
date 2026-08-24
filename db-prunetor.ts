@@ -5,9 +5,10 @@
 *	SQLite database (~/.local/share/opencode/opencode.db).
 *
 *	Runs on session dispose (opencode closing): verifies integrity, prunes
-*	event-sourcing rows from inactive sessions, rebuilds indexes, and
-*	refreshes planner statistics. Safe to run while opencode is live
-*	(everything goes through the WAL); no VACUUM / checkpoint truncation.
+*	event-sourcing rows from inactive sessions, rebuilds indexes, refreshes
+*	planner statistics, and compacts the file (VACUUM + WAL truncate) to
+*	reclaim the freed space. Safe to run while opencode is live (everything
+*	goes through the WAL); the heavy VACUUM only fires after a real prune.
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -22,7 +23,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.2
+*	@version 0.1.3
 *	@author Alejandro Carraretto
 *	@assistant DeepSeek-V4
 *	@license MIT
@@ -303,6 +304,16 @@ class DbPrunetor
 		log( LOG_LEVEL.INFO, "Reindex + optimize done" ) ;
 	}
 
+	// Reclaim disk space: VACUUM rebuilds the file dropping freed pages (the
+	// actual size saving after a prune), then truncate the WAL.
+	protected compact() : void
+	{
+		this.db!.exec( "VACUUM" ) ;
+		this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+
+		log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
+	}
+
 	// Log database / wal / shm / backup sizes
 	protected report() : void
 	{
@@ -340,6 +351,7 @@ class DbPrunetor
 		log( LOG_LEVEL.INFO, `Pruned events: ${ deleted }` ) ;
 
 		this.optimize() ;
+		this.compact() ;
 
 		// Success path: the temporary pre-prune backup is no longer needed
 		this.removeBackup() ;
