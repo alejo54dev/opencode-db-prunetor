@@ -1,5 +1,5 @@
 /**
- *	db-maintain.ts
+ *	db-prunetor.ts
  *
  *	OpenCode plugin — automatic lightweight maintenance of opencode's
  *	SQLite database (~/.local/share/opencode/opencode.db).
@@ -9,11 +9,11 @@
  *	refreshes planner statistics. Safe to run while opencode is live
  *	(everything goes through the WAL); no VACUUM / checkpoint truncation.
  *
- *	Install: cp db-maintain.ts ~/.config/opencode/plugins/db-maintain.ts
- *	Config:  ~/.config/opencode/db-maintain.jsonc
- *	Log:     ~/.config/opencode/db-maintain.log
+ *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
+ *	Config:  ~/.config/opencode/db-prunetor.jsonc
+ *	Log:     ~/.config/opencode/db-prunetor.log
  *
- *	@example ~/.config/opencode/db-maintain.jsonc
+ *	@example ~/.config/opencode/db-prunetor.jsonc
  *	{
  *		"enabled": true,             // master switch
  *		"prune_days": 30,            // delete events from sessions inactive > N days
@@ -23,7 +23,7 @@
  *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
  *	}
  *
- *	@name db-maintain
+ *	@name db-prunetor
  *	@version 0.1.0
  *	@author Alejandro Carraretto
  *	@license MIT
@@ -38,8 +38,8 @@ import { join } from "node:path" ;
 // ─── Paths ─────────────────────────────────────────────────────────────────
 
 const CONFIG_DIR  = join( homedir(), ".config", "opencode" ) ;
-const CONFIG_FILE = join( CONFIG_DIR, "db-maintain.jsonc" ) ;
-const LOG_FILE    = join( CONFIG_DIR, "db-maintain.log" ) ;
+const CONFIG_FILE = join( CONFIG_DIR, "db-prunetor.jsonc" ) ;
+const LOG_FILE    = join( CONFIG_DIR, "db-prunetor.log" ) ;
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ function timestamp() : string
 	return local.toISOString().slice( 0, 19 ) ;
 }
 
-// Load config from ~/.config/opencode/db-maintain.jsonc, fall back to defaults
+// Load config from ~/.config/opencode/db-prunetor.jsonc, fall back to defaults
 function loadConfig() : typeof CONFIG
 {
 	let file : Record<string, unknown> = {} ;
@@ -117,7 +117,7 @@ function loadConfig() : typeof CONFIG
 	return CONFIG ;
 }
 
-// Append timestamped entry to ~/.config/opencode/db-maintain.log
+// Append timestamped entry to ~/.config/opencode/db-prunetor.log
 function log( level : number, message : string ) : void
 {
 	const min = LOG_LEVEL[ ( CONFIG.log_level ?? "info" ).toUpperCase() ] ?? LOG_LEVEL.ERROR ;
@@ -169,10 +169,10 @@ function fileSize( p : string ) : string
 	}
 }
 
-// ─── DbMaintain ────────────────────────────────────────────────────────────
+// ─── DbPrunetor ────────────────────────────────────────────────────────────
 
 // Controller class: holds all plugin state and logic.
-class DbMaintain
+class DbPrunetor
 {
 	private config : typeof CONFIG ;
 	private db : Database | null = null ;
@@ -340,7 +340,7 @@ class DbMaintain
 
 // ─── Plugin ────────────────────────────────────────────────────────────────
 
-// Plugin factory: load config, build DbMaintain, register dispose hook
+// Plugin factory: load config, build DbPrunetor, register dispose hook
 export default ( async ( ctx : PluginInput ) =>
 {
 	const opts = loadConfig() ;
@@ -351,7 +351,7 @@ export default ( async ( ctx : PluginInput ) =>
 		return {} ;
 	}
 
-	const inst = new DbMaintain( opts ) ;
+	const inst = new DbPrunetor( opts ) ;
 
 	log( LOG_LEVEL.INFO, "Initialized" ) ;
 

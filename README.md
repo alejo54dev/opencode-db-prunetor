@@ -1,4 +1,4 @@
-# DB Maintain (keep opencode's brain lean)
+# DB Prunetor (keep opencode's brain lean)
 
 ![Version](https://img.shields.io/badge/version-0.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -73,15 +73,15 @@ flowchart TD
 ## 🚀 Installation
 
 ```bash
-cp db-maintain.ts ~/.config/opencode/plugins/db-maintain.ts
-cp db-maintain.jsonc ~/.config/opencode/db-maintain.jsonc
+cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
+cp db-prunetor.jsonc ~/.config/opencode/db-prunetor.jsonc
 ```
 
 No npm, no build step, no dependencies. OpenCode runs TypeScript natively. Restart opencode; maintenance runs automatically on close.
 
 ## ⚙️ Configuration
 
-Copy `db-maintain.jsonc` (included in this repo) to `~/.config/opencode/` and edit:
+Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and edit:
 
 ```jsonc
 {
@@ -105,10 +105,10 @@ Copy `db-maintain.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 
 ## 🪵 Logs
 
-`~/.config/opencode/db-maintain.log` (append-only). Format: `[TIMESTAMP] [LEVEL] message`.
+`~/.config/opencode/db-prunetor.log` (append-only). Format: `[TIMESTAMP] [LEVEL] message`.
 
 ```bash
-tail -f ~/.config/opencode/db-maintain.log
+tail -f ~/.config/opencode/db-prunetor.log
 ```
 
 ```log
