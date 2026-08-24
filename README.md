@@ -137,6 +137,7 @@ Less is more. :)
 ## 👤 Authors
 
 - Alejandro Carraretto
+- DeepSeek-V4 — assistant model during development
 
 ## 📄 License
 
