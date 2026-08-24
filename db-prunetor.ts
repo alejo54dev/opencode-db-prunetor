@@ -1,33 +1,33 @@
 /**
- *	db-prunetor.ts
- *
- *	OpenCode plugin — automatic lightweight maintenance of opencode's
- *	SQLite database (~/.local/share/opencode/opencode.db).
- *
- *	Runs on session dispose (opencode closing): verifies integrity, prunes
- *	event-sourcing rows from inactive sessions, rebuilds indexes, and
- *	refreshes planner statistics. Safe to run while opencode is live
- *	(everything goes through the WAL); no VACUUM / checkpoint truncation.
- *
- *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
- *	Config:  ~/.config/opencode/db-prunetor.jsonc
- *	Log:     ~/.config/opencode/db-prunetor.log
- *
- *	@example ~/.config/opencode/db-prunetor.jsonc
- *	{
- *		"enabled": true,             // master switch
- *		"prune_days": 30,            // delete events from sessions inactive > N days
- *		"backup": true,              // VACUUM INTO safe online backup before prune
- *		"backup_path": "~/.local/share/opencode/opencode.db.bak",
- *		"db_path": "~/.local/share/opencode/opencode.db",
- *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
- *	}
- *
- *	@name db-prunetor
- *	@version 0.1.0
- *	@author Alejandro Carraretto
- *	@license MIT
- */
+*	db-prunetor.ts
+*
+*	OpenCode plugin — automatic lightweight maintenance of opencode's
+*	SQLite database (~/.local/share/opencode/opencode.db).
+*
+*	Runs on session dispose (opencode closing): verifies integrity, prunes
+*	event-sourcing rows from inactive sessions, rebuilds indexes, and
+*	refreshes planner statistics. Safe to run while opencode is live
+*	(everything goes through the WAL); no VACUUM / checkpoint truncation.
+*
+*	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
+*	Config:  ~/.config/opencode/db-prunetor.jsonc
+*	Log:     ~/.config/opencode/db-prunetor.log
+*
+*	@example ~/.config/opencode/db-prunetor.jsonc
+*	{
+*		"enabled": true,             // master switch
+*		"prune_days": 30,            // delete events from sessions inactive > N days
+*		"backup": true,              // VACUUM INTO safe online backup before prune
+*		"backup_path": "~/.local/share/opencode/opencode.db.bak",
+*		"db_path": "~/.local/share/opencode/opencode.db",
+*		"log_level": "info"          // "silent" | "error" | "info" | "debug"
+*	}
+*
+*	@name db-prunetor
+*	@version 0.1.0
+*	@author Alejandro Carraretto
+*	@license MIT
+*/
 
 import type { Plugin, PluginInput } from "@opencode-ai/plugin" ;
 import { Database } from "bun:sqlite" ;
@@ -203,9 +203,9 @@ class DbPrunetor
 	protected applySpeedPragmas() : void
 	{
 		this.db!.exec(
-			`PRAGMA synchronous  = OFF ;
+			`PRAGMA synchronous  = NORMAL ;
 			 PRAGMA temp_store   = MEMORY ;
-			 PRAGMA cache_size   = -200000 ;
+			 PRAGMA cache_size   = 5000 ;
 			 PRAGMA busy_timeout = 5000 ;`
 		) ;
 	}

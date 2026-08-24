@@ -33,7 +33,7 @@ The plugin never blocks you, never touches opencode's own connection settings, a
 ```mermaid
 flowchart TD
     A["🔌 Session closes<br/>dispose hook fires"]
-    A --> B["🗄️ Open ephemeral RW connection<br/>speed pragmas (synchronous=OFF, temp_store=MEMORY)"]
+    A --> B["🗄️ Open ephemeral RW connection<br/>speed pragmas (synchronous=NORMAL, temp_store=MEMORY, cache_size=5000)"]
     B --> C{"PRAGMA<br/>integrity_check = ok?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
     C -->|"✅ yes"| D["🔢 Count eligible events<br/>(session inactive > prune_days)"]
@@ -130,7 +130,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Online backup** — `VACUUM INTO` writes a consistent snapshot without locking the live database.
 - **`time_updated` is epoch milliseconds** — the cutoff uses `strftime('%s','now','-N days') * 1000`.
 - **`event.aggregate_id` = `session.id`** — the prune keys off that mapping.
-- **Speed pragmas are ephemeral** — `synchronous=OFF`, `temp_store=MEMORY`, `cache_size=-200000` are set only on the maintenance connection and discarded on close. They never touch opencode's own connection.
+- **Speed pragmas are ephemeral** — `synchronous=NORMAL`, `temp_store=MEMORY`, `cache_size=5000` are set only on the maintenance connection and discarded on close. They never touch opencode's own connection. `NORMAL` keeps WAL crash-safety for the destructive `DELETE` (no `OFF`), and `cache_size=5000` (~20 MB) is enough for a DELETE+REINDEX workload.
 - **Ligero en vivo** — no `VACUUM`, no `wal_checkpoint(TRUNCATE)`. Freed pages go to the freelist; the file does not shrink.
 
 Less is more. :)
