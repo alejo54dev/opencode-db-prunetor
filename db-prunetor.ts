@@ -17,12 +17,12 @@
 *	{
  *		"enabled": true,             // master switch
  *		"prune_days": 30,            // delete events from sessions inactive > N days
- *		"db_path": "~/.local/share/opencode/opencode.db",
-*		"log_level": "info"          // "silent" | "error" | "info" | "debug"
+ *		// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
+ *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
- *	@version 0.1.1
+ *	@version 0.1.2
 *	@author Alejandro Carraretto
 *	@assistant DeepSeek-V4
 *	@license MIT
@@ -32,7 +32,7 @@ import type { Plugin } from "@opencode-ai/plugin" ;
 import { Database } from "bun:sqlite" ;
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync } from "node:fs" ;
 import { homedir } from "node:os" ;
-import { join } from "node:path" ;
+import { isAbsolute, join } from "node:path" ;
 
 // ─── Paths ─────────────────────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ function loadConfig() : typeof CONFIG
 
 	CONFIG.enabled     = file.enabled                       ?? CONFIG.enabled ;
 	CONFIG.prune_days  = Math.max( 1, file.prune_days       ?? CONFIG.prune_days ) ;
-	CONFIG.db_path     = file.db_path    ? resolvePath( String( file.db_path ) )    : CONFIG.db_path ;
+	CONFIG.db_path     = file.db_path    ? resolvePath( String( file.db_path ) )    : resolveDbPath() ;
 	CONFIG.log_level   = file.log_level                      ?? CONFIG.log_level ;
 
 	log( LOG_LEVEL.INFO, "Config loaded" ) ;
@@ -133,6 +133,31 @@ function resolvePath( p : string ) : string
 		p = join( homedir(), p.slice( 1 ) ) ;
 
 	return p ;
+}
+
+// opencode's data directory: $XDG_DATA_HOME/opencode or ~/.local/share/opencode
+function dataDir() : string
+{
+	return process.env.XDG_DATA_HOME
+		? join( process.env.XDG_DATA_HOME, "opencode" )
+		: join( homedir(), ".local", "share", "opencode" ) ;
+}
+
+// Mirror opencode's own DB-path resolution (its internal G4()):
+// OPENCODE_DB env wins (absolute / :memory: as-is, else relative to data dir);
+// otherwise the stable default <dataDir>/opencode.db.
+function resolveDbPath() : string
+{
+	const env = process.env.OPENCODE_DB ;
+
+	if ( env )
+	{
+		if ( env === ":memory:" || isAbsolute( env ) ) return env ;
+
+		return join( dataDir(), env ) ;
+	}
+
+	return join( dataDir(), "opencode.db" ) ;
 }
 
 // Escape a string for embedding inside a single-quoted SQL literal

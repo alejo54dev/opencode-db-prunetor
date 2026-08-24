@@ -1,6 +1,6 @@
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
-	"db_path": "~/.local/share/opencode/opencode.db",
+	// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
 	"log_level": "info"          // silent, error, info, debug
 }

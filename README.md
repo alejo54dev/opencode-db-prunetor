@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+![Version](https://img.shields.io/badge/version-0.1.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
 
@@ -89,7 +89,7 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
-	"db_path": "~/.local/share/opencode/opencode.db",
+	// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
 	"log_level": "info"          // "silent" | "error" | "info" | "debug"
 }
 ```
@@ -98,8 +98,10 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 |---|---|---|
 | `enabled` | `true` | Master switch |
 | `prune_days` | `30` | Delete events from sessions inactive beyond this many days |
-| `db_path` | `~/.local/share/opencode/opencode.db` | Location of opencode's database |
+| `db_path` | *auto-detected* | Optional override for opencode's database location |
 | `log_level` | `"info"` | `"silent"`, `"error"`, `"info"`, `"debug"` |
+
+**Database location is automatic.** The plugin resolves opencode's database the same way opencode itself does: it honors the `OPENCODE_DB` environment variable, and otherwise falls back to the stable default `<dataDir>/opencode.db` (`$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`). You only set `db_path` to override when necessary.
 
 The pre-prune backup is written automatically to `<db_path>.bak` (same directory as the database). It is a temporary safety net: kept only if maintenance fails, removed once the prune succeeds. No configuration needed.
 
@@ -142,4 +144,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.1
+MIT — version 0.1.2
