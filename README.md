@@ -14,13 +14,13 @@
 
 - **Runs on close** — maintenance fires on session `dispose`, when opencode releases its database connection. Zero startup cost, minimal contention.
 
-- **Integrity gate** — `PRAGMA integrity_check` must return "ok" before anything is touched. A suspect database is never pruned.
+- **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Safe online backup** — before any destructive change, `VACUUM INTO` writes a consistent snapshot. No lock on the live database.
+- **Safe online backup** — before any destructive change, a consistent snapshot of the database is written. No lock on the live database.
 
-- **Event pruning** — deletes event-sourcing rows from sessions inactive beyond `prune_days`, then `REINDEX` + `PRAGMA optimize` to keep indexes and planner statistics healthy.
+- **Event pruning** — deletes event history from sessions you haven't touched in a while, then rebuilds indexes and refreshes planner statistics to keep everything fast.
 
-- **Ligero en vivo** — everything goes through the WAL. No `VACUUM`, no `wal_checkpoint(TRUNCATE)`. Freed pages return to the freelist for reuse; the file does not shrink (heavy offline compaction was intentionally out of scope).
+- **Ligero en vivo** — the database stays fully usable while the plugin works. No heavy compaction: the file keeps its size, the freed space is simply reused.
 
 ## 🧠 Philosophy
 
@@ -33,19 +33,19 @@ The plugin never blocks you, never touches opencode's own connection settings, a
 ```mermaid
 flowchart TD
     A["🔌 Session closes<br/>dispose hook fires"]
-    A --> B["🗄️ Open ephemeral RW connection<br/>speed pragmas (synchronous=NORMAL, temp_store=MEMORY, cache_size=5000)"]
-    B --> C{"PRAGMA<br/>integrity_check = ok?"}
+    A --> B["🗄️ Open its own connection<br/>(safe speed settings, discarded after)"]
+    B --> C{"Database<br/>healthy?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
     C -->|"✅ yes"| D["🔢 Count eligible events<br/>(session inactive > prune_days)"]
     D --> E{"Eligible > 0?"}
     E -->|"❌ no"| R["📝 Log: no prune needed"]
-    E -->|"✅ yes"| F["💾 VACUUM INTO backup<br/>(online snapshot)"]
-    F --> G["🧹 DELETE events<br/>from inactive sessions"]
-    G --> H["🔧 REINDEX"]
-    H --> I["📊 PRAGMA optimize"]
+    E -->|"✅ yes"| F["💾 Online backup<br/>(consistent snapshot)"]
+    F --> G["🧹 Delete old events"]
+    G --> H["🔧 Rebuild indexes"]
+    H --> I["📊 Refresh planner stats"]
     R --> J["📋 Log report (sizes)"]
     I --> J
-    J --> K["🔚 Close connection<br/>(pragmas discarded)"]
+    J --> K["🔚 Close connection"]
 
     style A fill:#1a1a2e,stroke:#e94560,color:#fff
     style B fill:#0f3460,stroke:#53a8b6,color:#fff
@@ -125,13 +125,12 @@ tail -f ~/.config/opencode/db-prunetor.log
 
 ## 💬 Notes
 
-- **Runs on `dispose`, not startup** — at close, opencode releases its DB connection, so contention is minimal and session startup is never slowed.
-- **Integrity gate** — `PRAGMA integrity_check` must return "ok" before any mutation.
-- **Online backup** — `VACUUM INTO` writes a consistent snapshot without locking the live database.
-- **`time_updated` is epoch milliseconds** — the cutoff uses `strftime('%s','now','-N days') * 1000`.
-- **`event.aggregate_id` = `session.id`** — the prune keys off that mapping.
-- **Speed pragmas are ephemeral** — `synchronous=NORMAL`, `temp_store=MEMORY`, `cache_size=5000` are set only on the maintenance connection and discarded on close. They never touch opencode's own connection. `NORMAL` keeps WAL crash-safety for the destructive `DELETE` (no `OFF`), and `cache_size=5000` (~20 MB) is enough for a DELETE+REINDEX workload.
-- **Ligero en vivo** — no `VACUUM`, no `wal_checkpoint(TRUNCATE)`. Freed pages go to the freelist; the file does not shrink.
+- **Runs on close, not on startup** — when opencode finishes a session, it releases its database. That's the perfect moment: minimal contention, zero impact on how fast sessions start.
+- **Health first** — nothing is touched until the database proves it's healthy.
+- **Snapshot before surgery** — a consistent backup is written before anything is deleted, without locking the live database.
+- **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days; its event history goes with it, while your messages stay intact.
+- **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
+- **Ligero en vivo** — no heavy compaction: the file keeps its size and the freed space is reused.
 
 Less is more. :)
 
