@@ -23,9 +23,9 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.4
+*	@version 0.1.5
 *	@author Alejandro Carraretto
-*	@assistant DeepSeek-V4
+*	@assistant Hy3
 *	@license MIT
 */
 

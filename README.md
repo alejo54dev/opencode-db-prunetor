@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.4-blue)
+![Version](https://img.shields.io/badge/version-0.1.5-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
 
@@ -91,7 +91,7 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
-	// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
+	// "db_path":                // optional override; auto-detected if omitted
 	"log_level": "info"          // "silent" | "error" | "info" | "debug"
 }
 ```
@@ -143,8 +143,8 @@ Less is more. :)
 ## 👤 Authors
 
 - Alejandro Carraretto
-- DeepSeek-V4 — assistant model during development
+- Hy3 — assistant model during development
 
 ## 📄 License
 
-MIT — version 0.1.4
+MIT — version 0.1.5
