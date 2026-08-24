@@ -15,22 +15,20 @@
 *
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
-*		"enabled": true,             // master switch
-*		"prune_days": 30,            // delete events from sessions inactive > N days
-*		"backup": true,              // VACUUM INTO safe online backup before prune
-*		"backup_path": "~/.local/share/opencode/opencode.db.bak",
-*		"db_path": "~/.local/share/opencode/opencode.db",
+ *		"enabled": true,             // master switch
+ *		"prune_days": 30,            // delete events from sessions inactive > N days
+ *		"db_path": "~/.local/share/opencode/opencode.db",
 *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.0
+ *	@version 0.1.1
 *	@author Alejandro Carraretto
 *	@assistant DeepSeek-V4
 *	@license MIT
 */
 
-import type { Plugin, PluginInput } from "@opencode-ai/plugin" ;
+import type { Plugin } from "@opencode-ai/plugin" ;
 import { Database } from "bun:sqlite" ;
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync } from "node:fs" ;
 import { homedir } from "node:os" ;
@@ -48,8 +46,6 @@ const CONFIG =
 {
 	enabled     : true,
 	prune_days  : 30,
-	backup      : true,
-	backup_path : join( homedir(), ".local", "share", "opencode", "opencode.db.bak" ),
 	db_path     : join( homedir(), ".local", "share", "opencode", "opencode.db" ),
 	log_level   : "info" as "silent" | "error" | "info" | "debug",
 } ;
@@ -75,8 +71,6 @@ interface Config
 {
 	enabled     : boolean ;
 	prune_days  : number ;
-	backup      : boolean ;
-	backup_path : string ;
 	db_path     : string ;
 	log_level   : string ;
 }
@@ -108,8 +102,6 @@ function loadConfig() : typeof CONFIG
 
 	CONFIG.enabled     = file.enabled                       ?? CONFIG.enabled ;
 	CONFIG.prune_days  = Math.max( 1, file.prune_days       ?? CONFIG.prune_days ) ;
-	CONFIG.backup      = file.backup                        ?? CONFIG.backup ;
-	CONFIG.backup_path = file.backup_path ? resolvePath( String( file.backup_path ) ) : CONFIG.backup_path ;
 	CONFIG.db_path     = file.db_path    ? resolvePath( String( file.db_path ) )    : CONFIG.db_path ;
 	CONFIG.log_level   = file.log_level                      ?? CONFIG.log_level ;
 
@@ -235,16 +227,35 @@ class DbPrunetor
 		return row?.c ?? 0 ;
 	}
 
-	// Safe online backup via VACUUM INTO (consistent snapshot, no lock on live DB)
+	// Backup lives next to the db: "<db_path>.bak"
+	protected backupPath() : string
+	{
+		return this.config.db_path + ".bak" ;
+	}
+
+	// Temporary pre-prune safety backup via VACUUM INTO (consistent snapshot,
+	// no lock on live DB). Removed automatically once maintenance succeeds.
 	protected backup() : void
 	{
-		const path = this.config.backup_path ;
+		const path = this.backupPath() ;
 
 		if ( existsSync( path ) ) rmSync( path, { force : true } ) ;
 
 		this.db!.exec( `VACUUM INTO '${ sqlString( path ) }'` ) ;
 
 		log( LOG_LEVEL.INFO, `Backup written: ${ path } (${ fileSize( path ) })` ) ;
+	}
+
+	// Remove the temporary pre-prune backup once maintenance succeeded
+	protected removeBackup() : void
+	{
+		const path = this.backupPath() ;
+
+		if ( existsSync( path ) )
+		{
+			rmSync( path, { force : true } ) ;
+			log( LOG_LEVEL.INFO, `Backup removed: ${ path }` ) ;
+		}
 	}
 
 	// Prune event-sourcing rows from inactive sessions
@@ -276,7 +287,7 @@ class DbPrunetor
 			`Report — db: ${ fileSize( dbPath ) }, ` +
 			`wal: ${ fileSize( dbPath + "-wal" ) }, ` +
 			`shm: ${ fileSize( dbPath + "-shm" ) }, ` +
-			`bak: ${ fileSize( this.config.backup_path ) }`
+			`bak: ${ fileSize( this.backupPath() ) }`
 		) ;
 	}
 
@@ -297,14 +308,16 @@ class DbPrunetor
 			return ;
 		}
 
-		if ( this.config.backup )
-			this.backup() ;
+		this.backup() ;
 
 		const deleted = this.prune( days ) ;
 
 		log( LOG_LEVEL.INFO, `Pruned events: ${ deleted }` ) ;
 
 		this.optimize() ;
+
+		// Success path: the temporary pre-prune backup is no longer needed
+		this.removeBackup() ;
 	}
 
 	// ── Public hooks ──────────────────────────────────────────────────
@@ -342,7 +355,7 @@ class DbPrunetor
 // ─── Plugin ────────────────────────────────────────────────────────────────
 
 // Plugin factory: load config, build DbPrunetor, register dispose hook
-export default ( async ( ctx : PluginInput ) =>
+export default ( async () =>
 {
 	const opts = loadConfig() ;
 

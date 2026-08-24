@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
 
@@ -43,8 +43,9 @@ flowchart TD
     F --> G["🧹 Delete old events"]
     G --> H["🔧 Rebuild indexes"]
     H --> I["📊 Refresh planner stats"]
+    I --> L["🗑️ Remove backup<br/>(success)"]
     R --> J["📋 Log report (sizes)"]
-    I --> J
+    L --> J
     J --> K["🔚 Close connection"]
 
     style A fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -56,6 +57,7 @@ flowchart TD
     style G fill:#0f3460,stroke:#53a8b6,color:#fff
     style H fill:#0f3460,stroke:#53a8b6,color:#fff
     style I fill:#0f3460,stroke:#53a8b6,color:#fff
+    style L fill:#0f3460,stroke:#53a8b6,color:#fff
     style J fill:#1a1a2e,stroke:#e94560,color:#fff
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
     style R fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -87,8 +89,6 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
-	"backup": true,              // VACUUM INTO safe online backup before prune
-	"backup_path": "~/.local/share/opencode/opencode.db.bak",
 	"db_path": "~/.local/share/opencode/opencode.db",
 	"log_level": "info"          // "silent" | "error" | "info" | "debug"
 }
@@ -98,10 +98,10 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 |---|---|---|
 | `enabled` | `true` | Master switch |
 | `prune_days` | `30` | Delete events from sessions inactive beyond this many days |
-| `backup` | `true` | Write an online `VACUUM INTO` snapshot before pruning |
-| `backup_path` | `~/.local/share/opencode/opencode.db.bak` | Where the pre-prune backup is written |
 | `db_path` | `~/.local/share/opencode/opencode.db` | Location of opencode's database |
 | `log_level` | `"info"` | `"silent"`, `"error"`, `"info"`, `"debug"` |
+
+The pre-prune backup is written automatically to `<db_path>.bak` (same directory as the database). It is a temporary safety net: kept only if maintenance fails, removed once the prune succeeds. No configuration needed.
 
 ## 🪵 Logs
 
@@ -119,7 +119,8 @@ tail -f ~/.config/opencode/db-prunetor.log
 [2026-08-23T22:15:02] [INFO]: Backup written: /home/alejo/.local/share/opencode/opencode.db.bak (1.17 GB)
 [2026-08-23T22:15:05] [INFO]: Pruned events: 454878
 [2026-08-23T22:15:06] [INFO]: Reindex + optimize done
-[2026-08-23T22:15:06] [INFO]: Report — db: 1.17 GB, wal: 0.6 MB, shm: 32 KB, bak: 1.17 GB
+[2026-08-23T22:15:06] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
+[2026-08-23T22:15:06] [INFO]: Report — db: 1.17 GB, wal: 0.6 MB, shm: 32 KB, bak: absent
 [2026-08-23T22:15:06] [INFO]: Disposed
 ```
 
@@ -127,7 +128,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 
 - **Runs on close, not on startup** — when opencode finishes a session, it releases its database. That's the perfect moment: minimal contention, zero impact on how fast sessions start.
 - **Health first** — nothing is touched until the database proves it's healthy.
-- **Snapshot before surgery** — a consistent backup is written before anything is deleted, without locking the live database.
+- **Snapshot before surgery** — a consistent backup is written to `<db_path>.bak` before anything is deleted, without locking the live database. On success it is removed automatically; on failure it stays as a restore point.
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days; its event history goes with it, while your messages stay intact.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
 - **Ligero en vivo** — no heavy compaction: the file keeps its size and the freed space is reused.
@@ -141,4 +142,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.0
+MIT — version 0.1.1

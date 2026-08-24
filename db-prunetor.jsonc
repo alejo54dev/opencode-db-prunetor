@@ -1,8 +1,6 @@
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
-	"backup": true,              // VACUUM INTO safe online backup before prune
-	"backup_path": "~/.local/share/opencode/opencode.db.bak",
 	"db_path": "~/.local/share/opencode/opencode.db",
 	"log_level": "info"          // silent, error, info, debug
 }
