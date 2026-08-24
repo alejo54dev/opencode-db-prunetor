@@ -15,14 +15,14 @@
 *
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
- *		"enabled": true,             // master switch
- *		"prune_days": 30,            // delete events from sessions inactive > N days
- *		// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
- *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
+*		"enabled": true,             // master switch
+*		"prune_days": 30,            // delete events from sessions inactive > N days
+*		// "db_path": "~/.local/share/opencode/opencode.db",  // optional override; auto-detected if omitted
+*		"log_level": "info"          // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
- *	@version 0.1.2
+*	@version 0.1.2
 *	@author Alejandro Carraretto
 *	@assistant DeepSeek-V4
 *	@license MIT
