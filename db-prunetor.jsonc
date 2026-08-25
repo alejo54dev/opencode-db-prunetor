@@ -1,6 +1,7 @@
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
+	"backup": true,              // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 	// "db_path":                // optional override; auto-detected if omitted
 	"log_level": "info"          // silent, error, info, debug
 }

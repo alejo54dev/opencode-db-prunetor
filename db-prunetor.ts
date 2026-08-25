@@ -18,12 +18,13 @@
 *	{
 *		"enabled": true,             // master switch
 *		"prune_days": 30,            // delete events from sessions inactive > N days
+*		"backup": true,              // pre-prune snapshot (<db_path>.bak); false = single VACUUM, no restore point
 *		// "db_path":                // optional override; auto-detected if omitted
 *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.5
+*	@version 0.1.7
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -47,6 +48,7 @@ const CONFIG =
 {
 	enabled     : true,
 	prune_days  : 30,
+	backup      : true,
 	db_path     : join( homedir(), ".local", "share", "opencode", "opencode.db" ),
 	log_level   : "info" as "silent" | "error" | "info" | "debug",
 } ;
@@ -72,6 +74,7 @@ interface Config
 {
 	enabled     : boolean ;
 	prune_days  : number ;
+	backup      : boolean ;
 	db_path     : string ;
 	log_level   : string ;
 }
@@ -103,6 +106,7 @@ function loadConfig() : typeof CONFIG
 
 	CONFIG.enabled     = file.enabled                       ?? CONFIG.enabled ;
 	CONFIG.prune_days  = Math.max( 1, file.prune_days       ?? CONFIG.prune_days ) ;
+	CONFIG.backup      = file.backup                        ?? CONFIG.backup ;
 	CONFIG.db_path     = file.db_path    ? resolvePath( String( file.db_path ) )    : resolveDbPath() ;
 	CONFIG.log_level   = file.log_level                      ?? CONFIG.log_level ;
 
@@ -195,6 +199,7 @@ class DbPrunetor
 {
 	private config : typeof CONFIG ;
 	private db : Database | null = null ;
+	private backedUp : boolean = false ;
 
 	// Initialize: store config, no side effects, no DB open
 	constructor( config : typeof CONFIG )
@@ -261,13 +266,19 @@ class DbPrunetor
 
 	// Temporary pre-prune safety backup via VACUUM INTO (consistent snapshot,
 	// no lock on live DB). Removed automatically once maintenance succeeds.
+	// Skipped entirely when backup is disabled: prune then costs a single
+	// VACUUM pass instead of two, at the price of no restore point.
 	protected backup() : void
 	{
+		if ( ! this.config.backup ) return ;
+
 		const path = this.backupPath() ;
 
 		if ( existsSync( path ) ) rmSync( path, { force : true } ) ;
 
 		this.db!.exec( `VACUUM INTO '${ sqlString( path ) }'` ) ;
+
+		this.backedUp = true ;
 
 		log( LOG_LEVEL.INFO, `Backup written: ${ path } (${ fileSize( path ) })` ) ;
 	}
@@ -314,7 +325,7 @@ class DbPrunetor
 		log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
 	}
 
-	// Log database / wal / shm / backup sizes
+	// Log database / wal / shm sizes and whether the backup was written this run
 	protected report() : void
 	{
 		const dbPath = this.config.db_path ;
@@ -323,7 +334,7 @@ class DbPrunetor
 			`Report — db: ${ fileSize( dbPath ) }, ` +
 			`wal: ${ fileSize( dbPath + "-wal" ) }, ` +
 			`shm: ${ fileSize( dbPath + "-shm" ) }, ` +
-			`bak: ${ fileSize( this.backupPath() ) }`
+			`bak: ${ this.backedUp ? "written this run" : "none" }`
 		) ;
 	}
 
@@ -341,6 +352,12 @@ class DbPrunetor
 		if ( eligible === 0 )
 		{
 			log( LOG_LEVEL.INFO, "No prune needed" ) ;
+
+			// Backup disabled: any leftover .bak is dead weight — remove it.
+			// Backup enabled: a leftover .bak may be a restore point from a
+			// failed run — keep it.
+			if ( ! this.config.backup ) this.removeBackup() ;
+
 			return ;
 		}
 
@@ -369,6 +386,8 @@ class DbPrunetor
 			log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
 			return ;
 		}
+
+		this.backedUp = false ;
 
 		try
 		{

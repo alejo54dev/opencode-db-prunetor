@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.5-blue)
+![Version](https://img.shields.io/badge/version-0.1.7-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
 
@@ -91,6 +91,7 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete events from sessions inactive > N days
+	"backup": true,              // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 	// "db_path":                // optional override; auto-detected if omitted
 	"log_level": "info"          // "silent" | "error" | "info" | "debug"
 }
@@ -100,12 +101,13 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 |---|---|---|
 | `enabled` | `true` | Master switch |
 | `prune_days` | `30` | Delete events from sessions inactive beyond this many days |
+| `backup` | `true` | Pre-prune snapshot at `<db_path>.bak`. `false` = prune + compact in a single `VACUUM` pass (roughly half the time), at the cost of no restore point |
 | `db_path` | *auto-detected* | Optional override for opencode's database location |
 | `log_level` | `"info"` | `"silent"`, `"error"`, `"info"`, `"debug"` |
 
 **Database location is automatic.** The plugin resolves opencode's database the same way opencode itself does: it honors the `OPENCODE_DB` environment variable, and otherwise falls back to the stable default `<dataDir>/opencode.db` (`$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`). You only set `db_path` to override when necessary.
 
-The pre-prune backup is written automatically to `<db_path>.bak` (same directory as the database). It is a temporary safety net: kept only if maintenance fails, removed once the prune succeeds. No configuration needed.
+The pre-prune backup is written automatically to `<db_path>.bak` (same directory as the database). It is a temporary safety net: kept only if maintenance fails, removed once the prune succeeds. No configuration needed — unless you want speed over safety: with `"backup": false` the snapshot is skipped entirely and a prune costs a single `VACUUM` pass instead of two.
 
 ## 🪵 Logs
 
@@ -125,7 +127,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 [2026-08-23T22:15:06] [INFO]: Reindex + optimize done
 [2026-08-23T22:15:07] [INFO]: Vacuum + wal checkpoint done
 [2026-08-23T22:15:07] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
-[2026-08-23T22:15:07] [INFO]: Report — db: 0.35 GB, wal: 0.6 MB, shm: 32 KB, bak: absent
+[2026-08-23T22:15:07] [INFO]: Report — db: 0.35 GB, wal: 0.6 MB, shm: 32 KB, bak: written this run
 [2026-08-23T22:15:07] [INFO]: Disposed
 ```
 
@@ -133,7 +135,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 
 - **Runs on close, not on startup** — when opencode finishes a session, it releases its database. That's the perfect moment: minimal contention, zero impact on how fast sessions start.
 - **Health first** — nothing is touched until the database proves it's healthy.
-- **Snapshot before surgery** — a consistent backup is written to `<db_path>.bak` before anything is deleted, without locking the live database. On success it is removed automatically; on failure it stays as a restore point.
+- **Snapshot before surgery** — a consistent backup is written to `<db_path>.bak` before anything is deleted, without locking the live database. On success it is removed automatically; on failure it stays as a restore point. With `"backup": false` there is no snapshot: the prune becomes a single `VACUUM` pass, but a failed prune has nothing to restore from. The log only reports whether the backup was written this run (`bak: written this run` / `bak: none`) — no sizes.
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days; its event history goes with it, while your messages stay intact.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
 - **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close.
@@ -147,4 +149,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.5
+MIT — version 0.1.7
