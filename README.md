@@ -16,7 +16,7 @@
 
 - **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Safe online backup** — before any destructive change, a consistent snapshot of the database is written. No lock on the live database.
+- **Safe online backup** — before any destructive change, a consistent snapshot of the database is written (when `backup: true`, the default). No lock on the live database.
 
 - **Event pruning** — deletes event history from sessions you haven't touched in a while, then rebuilds indexes and refreshes planner statistics to keep everything fast.
 
@@ -39,7 +39,7 @@ flowchart TD
     C -->|"✅ yes"| D["🔢 Count eligible events<br/>(session inactive > prune_days)"]
     D --> E{"Eligible > 0?"}
     E -->|"❌ no"| R["📝 Log: no prune needed"]
-    E -->|"✅ yes"| F["💾 Online backup<br/>(consistent snapshot)"]
+    E -->|"✅ yes"| F["💾 Online backup<br/>(if backup enabled)"]
     F --> G["🧹 Delete old events"]
     G --> H["🔧 Rebuild indexes"]
     H --> I["📊 Refresh planner stats"]
@@ -118,17 +118,22 @@ tail -f ~/.config/opencode/db-prunetor.log
 ```
 
 ```log
-[2026-08-23T21:30:00] [INFO]: Config loaded
-[2026-08-23T21:30:01] [INFO]: Initialized
-[2026-08-23T22:15:00] [INFO]: Integrity check: ok
-[2026-08-23T22:15:00] [INFO]: Eligible events (inactive > 30d): 454878
-[2026-08-23T22:15:02] [INFO]: Backup written: /home/alejo/.local/share/opencode/opencode.db.bak (1.17 GB)
-[2026-08-23T22:15:05] [INFO]: Pruned events: 454878
-[2026-08-23T22:15:06] [INFO]: Reindex + optimize done
-[2026-08-23T22:15:07] [INFO]: Vacuum + wal checkpoint done
-[2026-08-23T22:15:07] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
-[2026-08-23T22:15:07] [INFO]: Report — db: 0.35 GB, wal: 0.6 MB, shm: 32 KB, bak: written this run
-[2026-08-23T22:15:07] [INFO]: Disposed
+[2026-08-25T11:21:53] [INFO]: Config loaded
+[2026-08-25T11:21:53] [INFO]: Initialized
+[2026-08-25T11:22:01] [INFO]: Integrity check: ok
+[2026-08-25T11:22:01] [INFO]: Eligible events (inactive > 30d): 18642
+[2026-08-25T11:22:03] [INFO]: Backup written: /home/alejo/.local/share/opencode/opencode.db.bak (1.14 GB)
+[2026-08-25T11:22:06] [INFO]: Pruned events: 18642
+[2026-08-25T11:22:07] [INFO]: Reindex + optimize done
+[2026-08-25T11:22:08] [INFO]: Vacuum + wal checkpoint done
+[2026-08-25T11:22:08] [INFO]: Backup removed: /home/alejo/.local/share/opencode/opencode.db.bak
+[2026-08-25T11:22:08] [INFO]: Report — db: 0.99 GB, wal: 4.0 MB, shm: 32.0 KB, bak: written this run
+[2026-08-25T11:22:08] [INFO]: Disposed
+[2026-08-25T11:30:00] [INFO]: Integrity check: ok
+[2026-08-25T11:30:00] [INFO]: Eligible events (inactive > 30d): 0
+[2026-08-25T11:30:00] [INFO]: No prune needed
+[2026-08-25T11:30:00] [INFO]: Report — db: 1.14 GB, wal: 4.0 MB, shm: 32.0 KB, bak: none
+[2026-08-25T11:30:00] [INFO]: Disposed
 ```
 
 ## 💬 Notes
