@@ -4,19 +4,21 @@
 
 An opencode plugin that performs lightweight, automatic maintenance of opencode's
 SQLite database (`~/.local/share/opencode/opencode.db`) on session close. It
-verifies integrity, prunes every table belonging to inactive sessions (parts,
-messages, the event journal, session metadata and the sessions themselves, plus
-projects left empty) in FK order (children before parents), sweeps rows
-orphaned by already-deleted sessions, rebuilds indexes, refreshes planner
-statistics, and compacts the file (`VACUUM` + `wal_checkpoint(TRUNCATE)`) to
-reclaim the freed space. Safe to run while opencode is live (everything goes
-through the WAL); the heavy `VACUUM` only fires after a real prune.
+verifies integrity, enforces performance pragmas (journal_mode=WAL,
+cache_size=25000, page_size=8192, auto_vacuum=OFF, etc.), prunes every table
+belonging to inactive sessions (parts, messages, the event journal, session
+metadata and the sessions themselves, plus projects left empty) in FK order
+(children before parents), sweeps rows orphaned by already-deleted sessions,
+refreshes planner statistics, and compacts the file (`VACUUM` +
+`wal_checkpoint(TRUNCATE)`) to reclaim the freed space. Safe to run while
+opencode is live (everything goes through the WAL); the heavy `VACUUM` only
+fires after a real prune.
 
 ## Source of truth
 
 - **`db-prunetor.ts`** — single TypeScript source file. The only source of truth.
 - **`db-prunetor.jsonc`** — config, goes in `~/.config/opencode/`.
-- **Version:** 0.1.10
+- **Version:** 0.1.11
 - **`~/.config/opencode/db-prunetor.log`** — append-only log.
 
 ## Mandatory skills
@@ -33,7 +35,7 @@ The plugin registers a single hook:
 
 | Hook | What it does |
 |---|---|
-| `dispose` | Runs maintenance on session close (opencode releasing its DB connection): integrity gate → optional `VACUUM INTO` backup → single `exec` with TEMP triggers that cascade every child of a deleted session/project, so one `DELETE FROM session` drags all related rows, plus orphan + empty-project sweep in the same `BEGIN`/`COMMIT` → `PRAGMA optimize` → `VACUUM` + `wal_checkpoint(TRUNCATE)` → remove backup. No `REINDEX` (VACUUM already rebuilds indexes). Backup skipped entirely when `backup` is `false` (default). |
+| `dispose` | Runs maintenance on session close (opencode releasing its DB connection): integrity gate → persistent pragmas (WAL, auto_vacuum=OFF, wal_autocheckpoint=1000) → optional `VACUUM INTO` backup → single `exec` with performance pragmas + TEMP triggers that cascade every child of a deleted session/project, so one `DELETE FROM session` drags all related rows, plus orphan + empty-project sweep in the same `BEGIN`/`COMMIT` → `PRAGMA optimize` → `page_size=8192` + `VACUUM` + `wal_checkpoint(TRUNCATE)` → remove backup. No `REINDEX` (VACUUM already rebuilds indexes). Backup skipped entirely when `backup` is `false` (default). |
 
 ### Maintenance sequence (`DbPrunetor.dispose`)
 

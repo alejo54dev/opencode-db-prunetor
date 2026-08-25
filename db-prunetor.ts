@@ -4,15 +4,15 @@
 *	OpenCode plugin — automatic lightweight maintenance of opencode's
 *	SQLite database (~/.local/share/opencode/opencode.db).
 *
-*	Runs on session dispose (opencode closing): verifies integrity, prunes
-*	every table belonging to sessions inactive beyond N days — parts,
-*	messages, the event journal, session metadata and the sessions
-*	themselves, plus projects left empty — in FK order (children before
-*	parents), sweeps rows orphaned by already-deleted sessions, refreshes
-*	planner statistics, and compacts the file (VACUUM +
-*	WAL truncate) to reclaim the freed space. Safe to run while opencode is
-*	live (everything goes through the WAL); the heavy VACUUM only fires
-*	after a real prune.
+*	Runs on session dispose (opencode closing): verifies integrity, enforces
+*	performance pragmas (journal_mode=WAL, cache_size=25000, page_size=8192,
+*	auto_vacuum=OFF, etc.), prunes every table belonging to sessions inactive
+*	beyond N days — parts, messages, the event journal, session metadata and
+*	the sessions themselves, plus projects left empty — in FK order (children
+*	before parents), sweeps rows orphaned by already-deleted sessions,
+*	refreshes planner statistics, and compacts the file (VACUUM + WAL truncate)
+*	to reclaim the freed space. Safe to run while opencode is live (everything
+*	goes through the WAL); the heavy VACUUM only fires after a real prune.
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -28,7 +28,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.10
+*	@version 0.1.11
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -205,11 +205,19 @@ class DbPrunetor
 
 	// ── Internal helpers ───────────────────────────────────────────────
 
-	// Open the database on this ephemeral connection (pragmas applied inline
-	// in the prune exec so they never touch opencode's own connection)
+	// Open the database on this ephemeral connection. Persistent pragmas
+	// (journal_mode, auto_vacuum, wal_autocheckpoint, journal_size_limit)
+	// are set once here; they survive reconexiones and are reinforced by
+	// VACUUM at the end of maintenance.
 	protected connect( path : string ) : void
 	{
 		this.db = new Database( path ) ;
+		this.db.exec(
+			`PRAGMA journal_mode       = WAL ;
+			 PRAGMA journal_size_limit = 0 ;
+			 PRAGMA wal_autocheckpoint = 1000 ;
+			 PRAGMA auto_vacuum        = OFF ;`
+		) ;
 	}
 
 	// Close the database and release the connection
@@ -333,11 +341,17 @@ class DbPrunetor
 		const before = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c ;
 
 		this.db!.exec(
-			`PRAGMA synchronous  = NORMAL ;
-			 PRAGMA temp_store   = MEMORY ;
-			 PRAGMA cache_size   = 5000 ;
-			 PRAGMA busy_timeout = 5000 ;
-			 PRAGMA foreign_keys = ON ;
+			`PRAGMA synchronous          = NORMAL ;
+			 PRAGMA temp_store           = MEMORY ;
+			 PRAGMA page_size            = 8192 ;
+			 PRAGMA cache_size           = 25000 ;
+			 PRAGMA cache_spill          = ON ;
+			 PRAGMA automatic_index      = ON ;
+			 PRAGMA recursive_triggers   = ON ;
+			 PRAGMA foreign_keys         = ON ;
+			 PRAGMA defer_foreign_keys   = OFF ;
+			 PRAGMA threads              = 4 ;
+			 PRAGMA busy_timeout         = 5000 ;
 
 			 CREATE TEMP TRIGGER pr_session_children BEFORE DELETE ON session BEGIN
 				DELETE FROM part            WHERE session_id   = OLD.id ;
@@ -366,8 +380,7 @@ class DbPrunetor
 				DELETE FROM event_sequence  WHERE aggregate_id NOT IN ( SELECT id FROM session ) ;
 				DELETE FROM todo            WHERE session_id   NOT IN ( SELECT id FROM session ) ;
 				DELETE FROM session_message WHERE session_id   NOT IN ( SELECT id FROM session ) ;
-				DELETE FROM project
-					WHERE NOT EXISTS ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;
+				DELETE FROM project         WHERE NOT EXISTS          ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;
 			 COMMIT ;`
 		) ;
 
@@ -392,7 +405,7 @@ class DbPrunetor
 			this.db!.exec( "PRAGMA busy_timeout = 1000" ) ;
 			this.db!.exec( "BEGIN IMMEDIATE" ) ;
 			this.db!.exec( "COMMIT" ) ;
-			this.db!.exec( "VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+			this.db!.exec( "PRAGMA page_size = 8192 ; VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
 			log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
 		}
 		catch ( err )
