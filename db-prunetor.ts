@@ -8,8 +8,8 @@
 *	every table belonging to sessions inactive beyond N days — parts,
 *	messages, the event journal, session metadata and the sessions
 *	themselves, plus projects left empty — in FK order (children before
-*	parents), sweeps rows orphaned by already-deleted sessions, rebuilds
-*	indexes, refreshes planner statistics, and compacts the file (VACUUM +
+*	parents), sweeps rows orphaned by already-deleted sessions, refreshes
+*	planner statistics, and compacts the file (VACUUM +
 *	WAL truncate) to reclaim the freed space. Safe to run while opencode is
 *	live (everything goes through the WAL); the heavy VACUUM only fires
 *	after a real prune.
@@ -28,7 +28,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.9
+*	@version 0.1.10
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -53,7 +53,7 @@ const CONFIG =
 	enabled     : true,
 	prune_days  : 30,
 	backup      : false,
-	db_path     : join( homedir(), ".local", "share", "opencode", "opencode.db" ),
+	db_path     : resolveDbPath(),
 	log_level   : "info" as "silent" | "error" | "info" | "debug",
 } ;
 
@@ -196,7 +196,6 @@ class DbPrunetor
 {
 	private config : typeof CONFIG ;
 	private db : Database | null = null ;
-	private backedUp : boolean = false ;
 
 	// Initialize: store config, no side effects, no DB open
 	constructor( config : typeof CONFIG )
@@ -254,8 +253,6 @@ class DbPrunetor
 
 		this.db!.exec( `VACUUM INTO '${ sqlString( path ) }'` ) ;
 
-		this.backedUp = true ;
-
 		log( LOG_LEVEL.INFO, `Backup written: ${ path } (${ fileSize( path ) })` ) ;
 	}
 
@@ -280,7 +277,7 @@ class DbPrunetor
 			`Report — db: ${ fileSize( dbPath ) }, ` +
 			`wal: ${ fileSize( dbPath + "-wal" ) }, ` +
 			`shm: ${ fileSize( dbPath + "-shm" ) }, ` +
-			`bak: ${ this.backedUp ? "written this run" : "none" }`
+			`bak: ${ this.config.backup ? "enabled" : "none" }`
 		) ;
 	}
 
@@ -419,8 +416,6 @@ class DbPrunetor
 			log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
 			return ;
 		}
-
-		this.backedUp = false ;
 
 		try
 		{

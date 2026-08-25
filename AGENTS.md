@@ -16,7 +16,7 @@ through the WAL); the heavy `VACUUM` only fires after a real prune.
 
 - **`db-prunetor.ts`** — single TypeScript source file. The only source of truth.
 - **`db-prunetor.jsonc`** — config, goes in `~/.config/opencode/`.
-- **Version:** 0.1.9
+- **Version:** 0.1.10
 - **`~/.config/opencode/db-prunetor.log`** — append-only log.
 
 ## Mandatory skills
@@ -80,7 +80,7 @@ dispose → open ephemeral RW connection to db_path
 - **Integrity gate** — `PRAGMA integrity_check` must return "ok" before any mutation. A suspect DB is never pruned.
 - **`db_path` is auto-detected, not configured** — the plugin resolves opencode's database the same way opencode does: it honors `process.env.OPENCODE_DB` (absolute / `:memory:` as-is, else relative to the data dir), otherwise the stable default `<dataDir>/opencode.db` where `dataDir` is `$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`. The `db_path` config key is an optional override only. No fragile hardcoded path.
 - **Online backup via `VACUUM INTO`** — consistent snapshot that does not lock the live database. Written to `<db_path>.bak` (same directory as the DB, derived automatically — no config) before the destructive `DELETE`. It is a temporary safety net: removed once maintenance succeeds, kept only if maintenance fails (restore point).
-- **`backup` config flag (default `false`)** — the snapshot (`VACUUM INTO`) and its removal are skipped entirely when `false`: a real prune then costs a single `VACUUM` pass instead of two (roughly half the time), at the price of no restore point. Set `true` only if you want a restore point on failure. The `report()` line shows `bak: written this run` when the snapshot was generated, `bak: none` otherwise — a boolean, no sizes (the `.bak` size is irrelevant). It never reads a stale `.bak` from disk.
+- **`backup` config flag (default `false`)** — the snapshot (`VACUUM INTO`) and its removal are skipped entirely when `false`: a real prune then costs a single `VACUUM` pass instead of two (roughly half the time), at the price of no restore point. Set `true` only if you want a restore point on failure. The `report()` line shows `bak: enabled` when backup is configured, `bak: none` otherwise — no sizes (the `.bak` size is irrelevant). It never reads a stale `.bak` from disk.
 - **Orphan `.bak` cleanup is conditional** — in the "no prune needed" branch, a leftover `.bak` is removed only when `backup` is `false` (dead weight; the user opted out of backups). With `backup: true` it is kept: it may be the restore point of a failed prune.
 - **Speed pragmas are per-connection and ephemeral** — set inline in the prune `exec` (synchronous=NORMAL, temp_store=MEMORY, cache_size=5000, busy_timeout=5000, foreign_keys=ON), discarded on `close()`. They never touch opencode's own connection settings.
 - **No `REINDEX`** — `VACUUM` rebuilds the entire database file including every index, so a `REINDEX` before `VACUUM` was pure wasted work (the old code did both). Removed; only `PRAGMA optimize` refreshes planner statistics after the prune.
@@ -118,6 +118,11 @@ No formal test framework. Verify by:
 5. Confirm `opencode.db.bak` does **not** exist after a successful prune (it is removed). If maintenance fails, the `.bak` is kept as a restore point.
 
 ## Changelog
+
+### v0.1.10
+- Removed the redundant `backedUp` instance flag — `report()` now derives the `bak:` line directly from `config.backup` (`enabled` / `none`). The flag only ever mirrored the config.
+- Dropped the dead hardcoded `CONFIG.db_path` default (it was always overwritten by `resolveDbPath()` in `loadConfig()` and ignored `OPENCODE_DB`/`XDG_DATA_HOME`). The default is now auto-resolved via `resolveDbPath()`, with the jsonc `db_path` override keeping priority.
+- Docblock accuracy: removed the stale "rebuilds indexes" claim (the `REINDEX` step was already gone — `VACUUM` rebuilds indexes).
 
 ### v0.1.9
 - Prune rewritten around TEMP `BEFORE DELETE` triggers: `pr_session_children` (cascades `part`/`message`/`event`/`event_sequence`/`todo`/`session_share`/`session_message`/`session_input`/`session_context_epoch` + repairs dangling `parent_id`) and `pr_project_children` (cascades `permission`/`workspace`/`project_directory`). One `DELETE FROM session` now drags every related row; empty projects swept by `DELETE FROM project WHERE NOT EXISTS (live session)`. No more temp tables, no per-table `run()` calls — the whole prune is a single `exec` inside one `BEGIN`/`COMMIT`.
