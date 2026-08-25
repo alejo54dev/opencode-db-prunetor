@@ -30,7 +30,7 @@
 *	@name db-prunetor
 *	@version 0.1.12
 *	@author Alejandro Carraretto
-*	@assistant MiMo-v2.5
+*	@assistant Hy3
 *	@license MIT
 */
 

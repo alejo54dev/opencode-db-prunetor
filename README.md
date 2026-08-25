@@ -152,7 +152,7 @@ Less is more. :)
 ## 👤 Authors
 
 - Alejandro Carraretto
-- MiMo-v2.5 — assistant model during development
+- Hy3 — assistant model during development
 
 ## 📄 License
 
