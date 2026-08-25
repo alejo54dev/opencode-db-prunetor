@@ -5,10 +5,14 @@
 *	SQLite database (~/.local/share/opencode/opencode.db).
 *
 *	Runs on session dispose (opencode closing): verifies integrity, prunes
-*	event-sourcing rows from inactive sessions, rebuilds indexes, refreshes
-*	planner statistics, and compacts the file (VACUUM + WAL truncate) to
-*	reclaim the freed space. Safe to run while opencode is live (everything
-*	goes through the WAL); the heavy VACUUM only fires after a real prune.
+*	every table belonging to sessions inactive beyond N days — parts,
+*	messages, the event journal, session metadata and the sessions
+*	themselves, plus projects left empty — in FK order (children before
+*	parents), sweeps rows orphaned by already-deleted sessions, rebuilds
+*	indexes, refreshes planner statistics, and compacts the file (VACUUM +
+*	WAL truncate) to reclaim the freed space. Safe to run while opencode is
+*	live (everything goes through the WAL); the heavy VACUUM only fires
+*	after a real prune.
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -17,14 +21,14 @@
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
 *		"enabled": true,             // master switch
-*		"prune_days": 30,            // delete events from sessions inactive > N days
-*		"backup": true,              // pre-prune snapshot (<db_path>.bak); false = single VACUUM, no restore point
+*		"prune_days": 30,            // delete sessions inactive > N days (and all their data)
+*		"backup": false,             // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 *		// "db_path":                // optional override; auto-detected if omitted
 *		"log_level": "info"          // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.7
+*	@version 0.1.9
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -48,7 +52,7 @@ const CONFIG =
 {
 	enabled     : true,
 	prune_days  : 30,
-	backup      : true,
+	backup      : false,
 	db_path     : join( homedir(), ".local", "share", "opencode", "opencode.db" ),
 	log_level   : "info" as "silent" | "error" | "info" | "debug",
 } ;
@@ -60,13 +64,6 @@ const LOG_LEVEL =
 	INFO   : 2,
 	DEBUG  : 3,
 } as const ;
-
-// Rows belonging to sessions inactive beyond N days (time_updated is epoch ms)
-const INACTIVE_SESSION_WHERE =
-	`aggregate_id IN (
-		SELECT id FROM session
-		WHERE time_updated < strftime( '%s', 'now', '-' || CAST( ? AS TEXT ) || ' days' ) * 1000
-	 )` ;
 
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
@@ -209,11 +206,11 @@ class DbPrunetor
 
 	// ── Internal helpers ───────────────────────────────────────────────
 
-	// Open the database and apply speed pragmas on this ephemeral connection
+	// Open the database on this ephemeral connection (pragmas applied inline
+	// in the prune exec so they never touch opencode's own connection)
 	protected connect( path : string ) : void
 	{
 		this.db = new Database( path ) ;
-		this.applySpeedPragmas() ;
 	}
 
 	// Close the database and release the connection
@@ -221,17 +218,6 @@ class DbPrunetor
 	{
 		try { this.db?.close() ; } catch {}
 		this.db = null ;
-	}
-
-	// Speed pragmas on THIS connection only (discarded on disconnect)
-	protected applySpeedPragmas() : void
-	{
-		this.db!.exec(
-			`PRAGMA synchronous  = NORMAL ;
-			 PRAGMA temp_store   = MEMORY ;
-			 PRAGMA cache_size   = 5000 ;
-			 PRAGMA busy_timeout = 5000 ;`
-		) ;
 	}
 
 	// Integrity gate — never mutate a suspect database
@@ -246,16 +232,6 @@ class DbPrunetor
 			log( LOG_LEVEL.ERROR, `Integrity check FAILED — aborting: ${ JSON.stringify( rows ) }` ) ;
 
 		return ok ;
-	}
-
-	// Count events belonging to sessions inactive beyond pruneDays
-	protected countEligible( pruneDays : number ) : number
-	{
-		const row = this.db!.prepare(
-			`SELECT COUNT(*) AS c FROM event WHERE ${ INACTIVE_SESSION_WHERE }`
-		).get( pruneDays ) as { c : number } | null ;
-
-		return row?.c ?? 0 ;
 	}
 
 	// Backup lives next to the db: "<db_path>.bak"
@@ -295,36 +271,6 @@ class DbPrunetor
 		}
 	}
 
-	// Prune event-sourcing rows from inactive sessions
-	protected prune( pruneDays : number ) : number
-	{
-		const result = this.db!.run(
-			`DELETE FROM event WHERE ${ INACTIVE_SESSION_WHERE }`,
-			[ pruneDays ]
-		) ;
-
-		return result.changes ?? 0 ;
-	}
-
-	// Rebuild indexes and refresh planner statistics over the post-prune state
-	protected optimize() : void
-	{
-		this.db!.exec( "REINDEX" ) ;
-		this.db!.exec( "PRAGMA analysis_limit = 1000 ; PRAGMA optimize" ) ;
-
-		log( LOG_LEVEL.INFO, "Reindex + optimize done" ) ;
-	}
-
-	// Reclaim disk space: VACUUM rebuilds the file dropping freed pages (the
-	// actual size saving after a prune), then truncate the WAL.
-	protected compact() : void
-	{
-		this.db!.exec( "VACUUM" ) ;
-		this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
-
-		log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
-	}
-
 	// Log database / wal / shm sizes and whether the backup was written this run
 	protected report() : void
 	{
@@ -338,18 +284,36 @@ class DbPrunetor
 		) ;
 	}
 
-	// Orchestrate the maintenance sequence on an open connection
+	// Orchestrate maintenance on an open connection.
+	//
+	// One integrity gate, one gate-count, then a single exec: TEMP triggers
+	// cascade every child of a deleted session (and every child of a deleted
+	// project), so one DELETE FROM session drags all related rows; orphaned
+	// rows (session already gone) and empty projects are swept in the same
+	// transaction. VACUUM runs outside the txn. REINDEX is deliberately absent
+	// — VACUUM rebuilds the whole file (indexes included), so REINDEX before
+	// it would be wasted work.
 	protected maintain() : void
 	{
 		const days = this.config.prune_days ;
 
+		// 1) integrity gate — never mutate a suspect database
 		if ( ! this.checkIntegrity() ) return ;
 
-		const eligible = this.countEligible( days ) ;
+		// 2) gate: anything to prune? (eligible sessions + already-orphaned rows)
+		const pending = this.db!.prepare(
+			`SELECT
+				( SELECT COUNT(*) FROM session WHERE time_updated < strftime( '%s', 'now', '-' || ? || ' days' ) * 1000 )
+				+ ( SELECT COUNT(*) FROM part            WHERE session_id   NOT IN ( SELECT id FROM session ) )
+				+ ( SELECT COUNT(*) FROM message         WHERE session_id   NOT IN ( SELECT id FROM session ) )
+				+ ( SELECT COUNT(*) FROM event           WHERE aggregate_id NOT IN ( SELECT id FROM session ) )
+				+ ( SELECT COUNT(*) FROM event_sequence  WHERE aggregate_id NOT IN ( SELECT id FROM session ) )
+				+ ( SELECT COUNT(*) FROM todo            WHERE session_id   NOT IN ( SELECT id FROM session ) )
+				+ ( SELECT COUNT(*) FROM session_message WHERE session_id   NOT IN ( SELECT id FROM session ) )
+				AS c`
+		).get( days ) as { c : number } ;
 
-		log( LOG_LEVEL.INFO, `Eligible events (inactive > ${ days }d): ${ eligible }` ) ;
-
-		if ( eligible === 0 )
+		if ( ! pending || pending.c === 0 )
 		{
 			log( LOG_LEVEL.INFO, "No prune needed" ) ;
 
@@ -361,16 +325,85 @@ class DbPrunetor
 			return ;
 		}
 
+		// 3) optional pre-prune snapshot (no-op when backup is false)
 		this.backup() ;
 
-		const deleted = this.prune( days ) ;
+		// 4) one-shot prune. BEFORE triggers delete children before the parent
+		//    row goes (so foreign_keys=ON never sees a dangling reference); the
+		//    session trigger also nulls parent_id of kept children. Triggers are
+		//    TEMP — they vanish when this connection closes, never touching
+		//    opencode's own schema.
+		const before = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c ;
 
-		log( LOG_LEVEL.INFO, `Pruned events: ${ deleted }` ) ;
+		this.db!.exec(
+			`PRAGMA synchronous  = NORMAL ;
+			 PRAGMA temp_store   = MEMORY ;
+			 PRAGMA cache_size   = 5000 ;
+			 PRAGMA busy_timeout = 5000 ;
+			 PRAGMA foreign_keys = ON ;
 
-		this.optimize() ;
-		this.compact() ;
+			 CREATE TEMP TRIGGER pr_session_children BEFORE DELETE ON session BEGIN
+				DELETE FROM part            WHERE session_id   = OLD.id ;
+				DELETE FROM message         WHERE session_id   = OLD.id ;
+				DELETE FROM event           WHERE aggregate_id = OLD.id ;
+				DELETE FROM event_sequence  WHERE aggregate_id = OLD.id ;
+				DELETE FROM todo            WHERE session_id   = OLD.id ;
+				DELETE FROM session_share   WHERE session_id   = OLD.id ;
+				DELETE FROM session_message WHERE session_id   = OLD.id ;
+				DELETE FROM session_input   WHERE session_id   = OLD.id ;
+				DELETE FROM session_context_epoch WHERE session_id = OLD.id ;
+				UPDATE session SET parent_id = NULL WHERE parent_id = OLD.id ;
+			 END ;
 
-		// Success path: the temporary pre-prune backup is no longer needed
+			 CREATE TEMP TRIGGER pr_project_children BEFORE DELETE ON project BEGIN
+				DELETE FROM permission        WHERE project_id = OLD.id ;
+				DELETE FROM workspace         WHERE project_id = OLD.id ;
+				DELETE FROM project_directory WHERE project_id = OLD.id ;
+			 END ;
+
+			 BEGIN ;
+				DELETE FROM session WHERE time_updated < strftime( '%s', 'now', '-' || ${ days } || ' days' ) * 1000 ;
+				DELETE FROM part            WHERE session_id   NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM message         WHERE session_id   NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM event           WHERE aggregate_id NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM event_sequence  WHERE aggregate_id NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM todo            WHERE session_id   NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM session_message WHERE session_id   NOT IN ( SELECT id FROM session ) ;
+				DELETE FROM project
+					WHERE NOT EXISTS ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;
+			 COMMIT ;`
+		) ;
+
+		const deleted = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c - before ;
+
+		log( LOG_LEVEL.INFO, `Pruned rows total: ${ deleted }` ) ;
+
+		// 5) refresh planner statistics (VACUUM below already rebuilds indexes)
+		this.db!.exec( "PRAGMA optimize" ) ;
+
+		// 6) reclaim space — but only when no other instance holds the DB.
+		//    opencode may run several instances sharing one DB over WAL; a
+		//    closing instance must not block or fail while siblings are live.
+		//    Probe with BEGIN IMMEDIATE (short timeout): if we take the lock the
+		//    DB is quiet — typically the last instance closing — so VACUUM +
+		//    wal_checkpoint(TRUNCATE) runs. If BUSY, another instance is active:
+		//    defer compaction (the data is already pruned) and let a later quiet
+		//    window do it. VACUUM lives in its own guarded block so a transient
+		//    BUSY is logged as "deferred", never as "Maintenance failed".
+		try
+		{
+			this.db!.exec( "PRAGMA busy_timeout = 1000" ) ;
+			this.db!.exec( "BEGIN IMMEDIATE" ) ;
+			this.db!.exec( "COMMIT" ) ;
+			this.db!.exec( "VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+			log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
+		}
+		catch ( err )
+		{
+			log( LOG_LEVEL.INFO, `Compaction deferred (database in use by another instance): ${ ( err as Error ).message }` ) ;
+		}
+
+		// 7) success — drop the temporary backup
 		this.removeBackup() ;
 	}
 
