@@ -28,7 +28,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.11
+*	@version 0.1.12
 *	@author Alejandro Carraretto
 *	@assistant MiMo-v2.5
 *	@license MIT
@@ -322,10 +322,7 @@ class DbPrunetor
 		{
 			log( LOG_LEVEL.INFO, "No prune needed" ) ;
 
-			// Backup disabled: any leftover .bak is dead weight — remove it.
-			// Backup enabled: a leftover .bak may be a restore point from a
-			// failed run — keep it.
-			if ( ! this.config.backup ) this.removeBackup() ;
+		this.removeBackup() ;
 
 			return ;
 		}
@@ -432,6 +429,9 @@ class DbPrunetor
 
 		try
 		{
+			// Clean up any orphan .bak left by a previous run (failed or interrupted)
+			this.removeBackup() ;
+
 			this.connect( dbPath ) ;
 			this.maintain() ;
 			this.report() ;
