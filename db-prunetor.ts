@@ -29,7 +29,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.14
+*	@version 0.1.15
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -471,7 +471,6 @@ class DbPrunetor
 		catch ( err )
 		{
 			log( LOG_LEVEL.ERROR, `Maintenance failed: ${( err as Error ).message }` ) ;
-			notify( "Pruning error — see db-prunetor.log" ) ;
 		}
 		finally
 		{

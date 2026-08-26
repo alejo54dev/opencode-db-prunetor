@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.14-blue)
+![Version](https://img.shields.io/badge/version-0.1.15-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -150,8 +150,6 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance to close usually does the compaction.
 - **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
-- **Terminal notice on exit** — while pruning on close, db-prunetor prints `Pruning opencode database…` (and `Pruning complete.`) to the terminal so you know why opencode briefly pauses. CLI/TUI only; the web UI has no terminal — check the log file there.
-
 Less is more. :)
 
 ## 👤 Authors
@@ -161,4 +159,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.14
+MIT — version 0.1.15
