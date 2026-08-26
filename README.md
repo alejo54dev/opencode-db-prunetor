@@ -44,8 +44,14 @@ flowchart TD
     E -->|"✅ yes"| F["💾 Online backup<br/>(if backup enabled)"]
     F --> G["🧹 One transaction, TEMP triggers cascade:<br/>DELETE session → all children<br/>+ orphan sweep + empty projects"]
     G --> I["📊 Refresh planner stats (PRAGMA optimize)"]
-    I --> M["🗜️ Compact (VACUUM + WAL truncate)<br/>deferred if DB in use"]
-    M --> L["🗑️ Remove backup<br/>(success)"]
+    I --> M["🔒 Try exclusive lock<br/>(BEGIN IMMEDIATE)"]
+    M -->|"⛔ busy — DB in use"| MD["⏳ Compaction deferred<br/>(another instance active)"]
+    M -->|"✅ lock acquired"| S{"db file ≥<br/>vacuum_min_gb?"}
+    S -->|"❌ no"| SK["🧹 WAL checkpoint only<br/>(VACUUM skipped — below threshold)"]
+    S -->|"✅ yes"| V["🗜️ VACUUM + WAL truncate"]
+    MD --> L["🗑️ Remove backup<br/>(success)"]
+    SK --> L
+    V --> L
     R --> J["📋 Log report (sizes)"]
     L --> J
     J --> K["🔚 Close connection"]
@@ -60,6 +66,10 @@ flowchart TD
     style I fill:#0f3460,stroke:#53a8b6,color:#fff
     style M fill:#0f3460,stroke:#53a8b6,color:#fff
     style L fill:#0f3460,stroke:#53a8b6,color:#fff
+    style S fill:#16213e,stroke:#e94560,color:#fff
+    style MD fill:#1a1a2e,stroke:#e94560,color:#fff
+    style SK fill:#0f3460,stroke:#53a8b6,color:#fff
+    style V fill:#0f3460,stroke:#53a8b6,color:#fff
     style J fill:#1a1a2e,stroke:#e94560,color:#fff
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
     style R fill:#1a1a2e,stroke:#e94560,color:#fff
