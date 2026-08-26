@@ -95,7 +95,6 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 	// "db_path":                // optional override; auto-detected if omitted
 	"log_level": "info",         // "silent" | "error" | "info" | "debug"
 	"vacuum_min_gb": 1           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
-	// on exit, a "Pruning opencode database…" notice is printed to the terminal (CLI/TUI only)
 }
 ```
 
