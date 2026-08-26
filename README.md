@@ -157,6 +157,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Orphaned rows go too** — parts, messages, events and todos whose session no longer exists (cleared or migrated sessions) are swept on the same run, so nothing dangles.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
 - **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance to close usually does the compaction.
+- **Size-aware compaction** — `VACUUM` only runs when the database file is at least `vacuum_min_gb` (default `1` GB); smaller databases get a WAL checkpoint only, skipping the heavier `VACUUM` pass. Set `vacuum_min_gb: 0` to always `VACUUM` after a prune.
 - **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
 Less is more. :)
