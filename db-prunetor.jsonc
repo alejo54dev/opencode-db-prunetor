@@ -1,8 +1,9 @@
 {
-	"enabled": true,             // master switch — false disables the whole plugin
+	"enabled": true,             // master switch
 	"prune_days": 30,            // delete sessions inactive > N days (and all their data)
 	"backup": false,             // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 	// "db_path":                // optional override; auto-detected if omitted
-	"log_level": "info",         // silent | error | info | debug
+	"log_level": "info",         // "silent" | "error" | "info" | "debug"
 	"vacuum_min_gb": 1           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
+	// on exit, a "Pruning opencode database…" notice is printed to the terminal (CLI/TUI only)
 }
