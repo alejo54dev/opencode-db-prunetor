@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.13-blue)
+![Version](https://img.shields.io/badge/version-0.1.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -93,7 +93,9 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 	"prune_days": 30,            // delete sessions inactive > N days (and all their data)
 	"backup": false,             // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 	// "db_path":                // optional override; auto-detected if omitted
-	"log_level": "info"          // "silent" | "error" | "info" | "debug"
+	"log_level": "info",         // "silent" | "error" | "info" | "debug"
+	"vacuum_min_gb": 1           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
+	// on exit, a "Pruning opencode database…" notice is printed to the terminal (CLI/TUI only)
 }
 ```
 
@@ -104,6 +106,7 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 | `backup` | `false` | Pre-prune snapshot at `<db_path>.bak`. `true` = restore point on failure, but prune + compact costs two `VACUUM` passes (roughly twice the time). `false` = single `VACUUM` pass |
 | `db_path` | *auto-detected* | Optional override for opencode's database location |
 | `log_level` | `"info"` | `"silent"`, `"error"`, `"info"`, `"debug"` |
+| `vacuum_min_gb` | `1` | Only `VACUUM` when the db file is ≥ N GB; `0` = always vacuum after a prune |
 
 **Database location is automatic.** The plugin resolves opencode's database the same way opencode itself does: it honors the `OPENCODE_DB` environment variable, and otherwise falls back to the stable default `<dataDir>/opencode.db` (`$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`). You only set `db_path` to override when necessary.
 
@@ -147,6 +150,8 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance to close usually does the compaction.
 - **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
+- **Terminal notice on exit** — while pruning on close, db-prunetor prints `Pruning opencode database…` (and `Pruning complete.`) to the terminal so you know why opencode briefly pauses. CLI/TUI only; the web UI has no terminal — check the log file there.
+
 Less is more. :)
 
 ## 👤 Authors
@@ -156,4 +161,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.13
+MIT — version 0.1.14

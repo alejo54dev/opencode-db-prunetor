@@ -29,7 +29,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.13
+*	@version 0.1.14
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -130,6 +130,14 @@ function log( level : number, message : string ) : void
 	{
 		appendFileSync( LOG_FILE, `[${ timestamp() }] [${ label }]: ${ message }\n` ) ;
 	}
+	catch {}
+}
+
+// Print a line straight to the terminal (not the log file) so the user sees
+// what opencode is doing during the dispose wait, instead of a silent freeze.
+function notify( message : string ) : void
+{
+	try { process.stdout.write( message + "\n" ) ; }
 	catch {}
 }
 
@@ -450,16 +458,20 @@ class DbPrunetor
 			return ;
 		}
 
+		notify( "Pruning opencode database…" ) ;
+
 		try
 		{
 			this.removeBackup() ;
 			this.connect( dbPath ) ;
 			this.maintain() ;
 			this.report() ;
+			notify( "Pruning complete." ) ;
 		}
 		catch ( err )
 		{
 			log( LOG_LEVEL.ERROR, `Maintenance failed: ${( err as Error ).message }` ) ;
+			notify( "Pruning error — see db-prunetor.log" ) ;
 		}
 		finally
 		{
