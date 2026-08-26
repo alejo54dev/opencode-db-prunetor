@@ -322,8 +322,7 @@ class DbPrunetor
 		{
 			log( LOG_LEVEL.INFO, "No prune needed" ) ;
 
-		this.removeBackup() ;
-
+			this.removeBackup() ;
 			return ;
 		}
 
