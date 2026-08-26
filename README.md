@@ -2,7 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-0.1.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![OpenCode](https://img.shields.io/badge/OpenCode-plugin-purple)
+![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
 > opencode's SQLite database grows forever. Event-sourcing rows pile up from sessions you'll never reopen. Your AI should not choke on its own history.
 

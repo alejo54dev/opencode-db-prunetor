@@ -32,6 +32,7 @@
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
+ *	@compatibility OpenCode v1
 */
 
 import type { Plugin } from "@opencode-ai/plugin" ;
