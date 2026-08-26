@@ -466,6 +466,7 @@ class DbPrunetor
 			this.connect( dbPath ) ;
 			this.maintain() ;
 			this.report() ;
+
 			notify( "Pruning complete." ) ;
 		}
 		catch ( err )
