@@ -20,19 +20,20 @@
 *
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
-*		"enabled": true,             // master switch
+*		"enabled": true,             // master switch — false disables the whole plugin
 *		"prune_days": 30,            // delete sessions inactive > N days (and all their data)
 *		"backup": false,             // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 *		// "db_path":                // optional override; auto-detected if omitted
-*		"log_level": "info"          // "silent" | "error" | "info" | "debug"
+*		"log_level": "info",         // silent | error | info | debug
+*		"vacuum_min_gb": 1           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.12
+*	@version 0.1.13
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
- *	@compatibility OpenCode v1
+*	@compatibility OpenCode v1
 */
 
 import type { Plugin } from "@opencode-ai/plugin" ;
@@ -51,11 +52,12 @@ const LOG_FILE    = join( CONFIG_DIR, "db-prunetor.log" ) ;
 
 const CONFIG =
 {
-	enabled     : true,
-	prune_days  : 30,
-	backup      : false,
-	db_path     : resolveDbPath(),
-	log_level   : "info" as "silent" | "error" | "info" | "debug",
+	enabled        : true,
+	prune_days     : 30,
+	backup         : false,
+	db_path        : resolveDbPath(),
+	log_level      : "info" as "silent" | "error" | "info" | "debug",
+	vacuum_min_gb  : 1,
 } ;
 
 const LOG_LEVEL =
@@ -70,11 +72,12 @@ const LOG_LEVEL =
 
 interface Config
 {
-	enabled     : boolean ;
-	prune_days  : number ;
-	backup      : boolean ;
-	db_path     : string ;
-	log_level   : string ;
+	enabled        : boolean ;
+	prune_days     : number ;
+	backup         : boolean ;
+	db_path        : string ;
+	log_level      : string ;
+	vacuum_min_gb  : number ;
 }
 
 // ─── Global Helpers ──────────────────────────────────────────────────────────
@@ -107,6 +110,7 @@ function loadConfig() : typeof CONFIG
 	CONFIG.backup      = file.backup                        ?? CONFIG.backup ;
 	CONFIG.db_path     = file.db_path    ? resolvePath( String( file.db_path ) )    : resolveDbPath() ;
 	CONFIG.log_level   = file.log_level                      ?? CONFIG.log_level ;
+	CONFIG.vacuum_min_gb = file.vacuum_min_gb                ?? CONFIG.vacuum_min_gb ;
 
 	log( LOG_LEVEL.INFO, "Config loaded" ) ;
 
@@ -402,8 +406,27 @@ class DbPrunetor
 			this.db!.exec( "PRAGMA busy_timeout = 1000" ) ;
 			this.db!.exec( "BEGIN IMMEDIATE" ) ;
 			this.db!.exec( "COMMIT" ) ;
-			this.db!.exec( "PRAGMA page_size = 8192 ; VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
-			log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
+
+			const dbBytes = ( () =>
+			{
+				try { return statSync( this.config.db_path ).size ; }
+				catch { return 0 ; }
+			} )() ;
+
+			const threshold = this.config.vacuum_min_gb * 1024 * 1024 * 1024 ;
+
+			if ( threshold > 0 && dbBytes < threshold )
+			{
+				log( LOG_LEVEL.INFO,
+					`Vacuum skipped — db ${ fileSize( this.config.db_path ) } ` +
+					`below ${ this.config.vacuum_min_gb }GB threshold` ) ;
+				this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+			}
+			else
+			{
+				this.db!.exec( "PRAGMA page_size = 8192 ; VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+				log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
+			}
 		}
 		catch ( err )
 		{
@@ -429,9 +452,7 @@ class DbPrunetor
 
 		try
 		{
-			// Clean up any orphan .bak left by a previous run (failed or interrupted)
 			this.removeBackup() ;
-
 			this.connect( dbPath ) ;
 			this.maintain() ;
 			this.report() ;
