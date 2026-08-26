@@ -16,13 +16,13 @@
 
 - **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Safe online backup** — before any destructive change, a consistent snapshot of the database is written (when `backup: true`; the default is `false` for speed — a single `VACUUM` pass, no restore point). No lock on the live database.
+- **Safe online backup** — when `backup: true`, a consistent snapshot is written before any destructive change (default `false` for speed — a single `VACUUM` pass, no restore point). No lock on the live database.
 
-- **Full prune, correct order** — deletes every table belonging to sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus projects left empty. Two `TEMP` `BEFORE DELETE` triggers cascade every child of a deleted session/project, so one `DELETE FROM session` drags the whole subtree inside a single transaction — nothing dangles, and the triggers vanish when the connection closes (they never touch opencode's own schema).
+- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. Two `TEMP` `BEFORE DELETE` triggers cascade every child of a deleted session/project, so one `DELETE FROM session` drags the whole subtree inside a single transaction — nothing dangles, and the triggers vanish when the connection closes (they never touch opencode's own schema).
 
-- **Orphan sweep** — rows left behind by sessions opencode itself deleted (cleared or migrated) are dead weight; they get swept on the same run.
+- **Orphan sweep** — rows left behind when opencode itself deletes sessions (cleared or migrated) are dead weight; they get swept on the same run.
 
-- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically the last instance closing) instead of failing.
+- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically the last instance to close) instead of failing.
 
 ## 🧠 Philosophy
 
@@ -72,7 +72,7 @@ flowchart TD
 
 **Replay safety.** Event-sourcing rows are only needed to reconstruct old sessions. Once a session goes inactive, its rows are dead weight — and a session that goes inactive for good is removed entirely, along with the project that ends up empty.
 
-**Peace of mind.** An integrity gate plus an automatic online backup mean a prune can never be the thing that breaks your history.
+**Peace of mind.** An integrity gate plus an automatic online backup means a prune can never be the thing that breaks your history.
 
 ## 🚀 Installation
 
@@ -144,8 +144,8 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days. Its whole subtree goes with it; recent sessions are never touched.
 - **Orphaned rows go too** — parts, messages, events and todos whose session no longer exists (cleared or migrated sessions) are swept on the same run, so nothing dangles.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
-- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance closing usually does the compaction.
-- **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling's own deletes.
+- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance to close usually does the compaction.
+- **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
 Less is more. :)
 
