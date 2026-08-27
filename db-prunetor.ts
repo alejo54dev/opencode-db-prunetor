@@ -28,6 +28,7 @@
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license Apache-2.0
+*	@compatibility OpenCode v1
 */
 
 import type { Plugin } from "@opencode-ai/plugin" ;
