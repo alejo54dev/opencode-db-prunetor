@@ -4,15 +4,20 @@
 *	OpenCode plugin — automatic lightweight maintenance of opencode's
 *	SQLite database (~/.local/share/opencode/opencode.db).
 *
-*	Runs on session dispose (opencode closing): verifies integrity, enforces
-*	performance pragmas (journal_mode=WAL, cache_size=25000, page_size=8192,
-*	auto_vacuum=OFF, etc.), prunes every table belonging to sessions inactive
-*	beyond N days — parts, messages, the event journal, session metadata and
-*	the sessions themselves, plus projects left empty — in FK order (children
-*	before parents), sweeps rows orphaned by already-deleted sessions,
-*	refreshes planner statistics, and compacts the file (VACUUM + WAL truncate)
-*	to reclaim the freed space. Safe to run while opencode is live (everything
-*	goes through the WAL); the heavy VACUUM only fires after a real prune.
+ *	Runs on opencode startup, fully off the main thread: the plugin factory
+ *	only orchestrates and spawns a detached Worker (opencode's internal bun
+ *	runtime) that performs every SQL operation — integrity check, prune,
+ *	optimize and VACUUM. Because the heavy work lives in a Worker, startup is
+ *	never blocked, and the Worker never loads plugins (no recursion, no second
+ *	opencode instance). Verifies integrity, enforces performance pragmas
+ *	(journal_mode=WAL, cache_size=25000, page_size=8192, auto_vacuum=OFF,
+ *	etc.), prunes every table belonging to sessions inactive beyond N days —
+ *	parts, messages, the event journal, session metadata and the sessions
+ *	themselves, plus projects left empty — in FK order (children before
+ *	parents), sweeps rows orphaned by already-deleted sessions, refreshes
+ *	planner statistics, and compacts the file (VACUUM + WAL truncate) to
+ *	reclaim the freed space. Safe to run while opencode is live (everything
+ *	goes through the WAL); the heavy VACUUM only fires after a real prune.
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -29,7 +34,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 0.1.15
+ *	@version 0.1.16
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -38,7 +43,8 @@
 
 import type { Plugin } from "@opencode-ai/plugin" ;
 import { Database } from "bun:sqlite" ;
-import { appendFileSync, existsSync, readFileSync, rmSync, statSync } from "node:fs" ;
+import { parentPort, Worker } from "node:worker_threads" ;
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs" ;
 import { homedir } from "node:os" ;
 import { isAbsolute, join } from "node:path" ;
 
@@ -451,14 +457,22 @@ class DbPrunetor
 	public async dispose() : Promise<void>
 	{
 		const dbPath = this.config.db_path ;
+		const lock   = dbPath + ".prune.lock" ;
+
+		if ( existsSync( lock ) )
+		{
+			log( LOG_LEVEL.INFO, "Another prune already running — skip" ) ;
+			return ;
+		}
+
+		writeFileSync( lock, String( process.pid ) ) ;
 
 		if ( ! existsSync( dbPath ) )
 		{
 			log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
+			rmSync( lock, { force : true } ) ;
 			return ;
 		}
-
-		notify( "Pruning opencode database…" ) ;
 
 		try
 		{
@@ -466,8 +480,6 @@ class DbPrunetor
 			this.connect( dbPath ) ;
 			this.maintain() ;
 			this.report() ;
-
-			notify( "Pruning complete." ) ;
 		}
 		catch ( err )
 		{
@@ -476,15 +488,34 @@ class DbPrunetor
 		finally
 		{
 			this.disconnect() ;
+			rmSync( lock, { force : true } ) ;
 		}
 
 		log( LOG_LEVEL.INFO, "Disposed" ) ;
 	}
 }
 
+// ─── Worker entry ──────────────────────────────────────────────────────────
+
+// When opencode loads this file as a plugin, parentPort is undefined and this
+// block is skipped — the plugin below just spawns a Worker. When the Worker
+// (the same file, executed as a thread) reaches this point, parentPort exists,
+// so it runs the full maintenance off the main thread. The Worker never loads
+// plugins, so there is no recursion and no second opencode instance.
+
+if ( typeof parentPort !== "undefined" && parentPort )
+{
+	const inst = new DbPrunetor( loadConfig() ) ;
+
+	inst.dispose()
+		.then( () => parentPort!.postMessage( "done" ) )
+		.catch( () => parentPort!.postMessage( "done" ) ) ;
+}
+
 // ─── Plugin ────────────────────────────────────────────────────────────────
 
-// Plugin factory: load config, build DbPrunetor, register dispose hook
+// Plugin factory: orchestration only. All SQL runs in a detached Worker thread
+// (opencode's internal bun runtime) so the prune + VACUUM never block startup.
 export default ( async () =>
 {
 	const opts = loadConfig() ;
@@ -495,16 +526,30 @@ export default ( async () =>
 		return {} ;
 	}
 
-	const inst = new DbPrunetor( opts ) ;
-
 	log( LOG_LEVEL.INFO, "Initialized" ) ;
+	notify( "Pruning opencode database… (background)" ) ;
+
+	try
+	{
+		const worker = new Worker( new URL( import.meta.url ) ) ;
+
+		worker.on( "exit", ( code ) =>
+		{
+			notify( code === 0 ? "Pruning complete." : "Pruning deferred (db in use)." ) ;
+		} ) ;
+
+		worker.on( "error", () =>
+		{
+			notify( "Pruning failed (see log)." ) ;
+		} ) ;
+	}
+	catch ( err )
+	{
+		log( LOG_LEVEL.ERROR, `Worker spawn failed: ${ ( err as Error ).message }` ) ;
+	}
 
 	return {
-		// Maintenance runs on session close (opencode releasing its DB connection)
-		dispose : async () =>
-		{
-			await inst.dispose() ;
-		},
+		dispose : async () => {},
 	} ;
 } ) satisfies Plugin ;
 
