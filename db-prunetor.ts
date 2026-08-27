@@ -27,7 +27,7 @@
 *	@version 1.1.23
 *	@author Alejandro Carraretto
 *	@assistant Hy3
-*	@license MIT
+*	@license Apache-2.0
 */
 
 import type { Plugin } from "@opencode-ai/plugin" ;
