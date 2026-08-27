@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-0.1.15-blue)
+![Version](https://img.shields.io/badge/version-1.1.20-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -12,21 +12,19 @@
 
 - **Copy and it works** — single TypeScript file, native `bun:sqlite`. No npm, no node_modules, no drama.
 
-- **Runs on close** — maintenance fires on session `dispose`, when opencode releases its database connection. Zero startup cost, minimal contention.
+- **Runs on startup** — maintenance fires in a detached Worker thread the moment opencode loads, fully off the main thread so startup is never blocked.
 
 - **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Safe online backup** — when `backup: true`, a consistent snapshot is written before any destructive change (default `false` for speed — a single `VACUUM` pass, no restore point). No lock on the live database.
-
-- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. Two `TEMP` `BEFORE DELETE` triggers cascade every child of a deleted session/project, so one `DELETE FROM session` drags the whole subtree inside a single transaction — nothing dangles, and the triggers vanish when the connection closes (they never touch opencode's own schema).
+- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. A single transaction issues explicit, ordered `DELETE`s — children of old sessions and already-orphaned rows are removed by the same statement (so nothing dangles), then the sessions, the dangling `parent_id` links, and finally empty projects and their children.
 
 - **Orphan sweep** — rows left behind when opencode itself deletes sessions (cleared or migrated) are dead weight; they get swept on the same run.
 
-- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically the last instance to close) instead of failing.
+- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically when no other instance holds the DB) instead of failing.
 
 ## 🧠 Philosophy
 
-Maintenance is a habit, not an emergency. A small, safe pass on every session close beats a scary 6 GB cleanup after months of neglect.
+Maintenance is a habit, not an emergency. A small, safe pass on every startup beats a scary 6 GB cleanup after months of neglect.
 
 The plugin never blocks you, never touches opencode's own connection settings, and never mutates a database it cannot first prove is healthy.
 
@@ -34,20 +32,18 @@ The plugin never blocks you, never touches opencode's own connection settings, a
 
 ```mermaid
 flowchart TD
-    A["🔌 Session closes<br/>dispose hook fires"]
+    A["🚀 opencode starts<br/>plugin spawns detached Worker"]
     A --> B["🗄️ Open its own connection<br/>(safe speed settings, discarded after)"]
     B --> C{"Database<br/>healthy?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
-    C -->|"✅ yes"| D["📋 Snapshot eligible sets<br/>sessions inactive > prune_days<br/>+ orphan rows"]
+    C -->|"✅ yes"| D["📋 Count eligible sets<br/>sessions inactive > prune_days<br/>+ orphan rows"]
     D --> E{"Eligible sessions<br/>or orphans?"}
     E -->|"❌ no"| R["📝 Log: no prune needed"]
-    E -->|"✅ yes"| F["💾 Online backup<br/>(if backup enabled)"]
-    F --> G["🧹 One transaction, TEMP triggers cascade:<br/>DELETE session → all children<br/>+ orphan sweep + empty projects"]
+    E -->|"✅ yes"| G["🧹 One transaction, explicit ordered deletes:<br/>children of old sessions + orphans<br/>+ empty projects"]
     G --> I["📊 Refresh planner stats (PRAGMA optimize)"]
     I --> M["🗜️ Compact<br/>VACUUM if db ≥ vacuum_min_gb (else WAL checkpoint)<br/>deferred if DB in use"]
-    M --> L["🗑️ Remove backup<br/>(success)"]
     R --> J["📋 Log report (sizes)"]
-    L --> J
+    M --> J
     J --> K["🔚 Close connection"]
 
     style A fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -55,11 +51,9 @@ flowchart TD
     style C fill:#16213e,stroke:#e94560,color:#fff
     style D fill:#0f3460,stroke:#53a8b6,color:#fff
     style E fill:#16213e,stroke:#e94560,color:#fff
-    style F fill:#0f3460,stroke:#53a8b6,color:#fff
     style G fill:#0f3460,stroke:#53a8b6,color:#fff
     style I fill:#0f3460,stroke:#53a8b6,color:#fff
     style M fill:#0f3460,stroke:#53a8b6,color:#fff
-    style L fill:#0f3460,stroke:#53a8b6,color:#fff
     style J fill:#1a1a2e,stroke:#e94560,color:#fff
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
     style R fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -68,7 +62,7 @@ flowchart TD
 
 ## 🎯 Use cases
 
-**Disk creep.** After weeks of sessions, `opencode.db` grows as parts, messages and the event journal pile up from sessions you'll never reopen. The plugin trims the dead weight on every close.
+**Disk creep.** After weeks of sessions, `opencode.db` grows as parts, messages and the event journal pile up from sessions you'll never reopen. The plugin trims the dead weight on every startup.
 
 **Replay safety.** Event-sourcing rows are only needed to reconstruct old sessions. Once a session goes inactive, its rows are dead weight — and a session that goes inactive for good is removed entirely, along with the project that ends up empty.
 
@@ -81,7 +75,7 @@ cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 cp db-prunetor.jsonc ~/.config/opencode/db-prunetor.jsonc
 ```
 
-No npm, no build step, no dependencies. OpenCode runs TypeScript natively. Restart opencode; maintenance runs automatically on close.
+No npm, no build step, no dependencies. OpenCode runs TypeScript natively. Restart opencode; maintenance runs automatically on startup (in a background Worker).
 
 ## ⚙️ Configuration
 
@@ -91,7 +85,6 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 {
 	"enabled": true,             // master switch
 	"prune_days": 30,            // delete sessions inactive > N days (and all their data)
-	"backup": false,             // pre-prune snapshot (<db_path>.bak); false = faster (single VACUUM), no restore point
 	// "db_path":                // optional override; auto-detected if omitted
 	"log_level": "info",         // "silent" | "error" | "info" | "debug"
 	"vacuum_min_gb": 1           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
@@ -102,7 +95,6 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 |---|---|---|
 | `enabled` | `true` | Master switch |
 | `prune_days` | `30` | Delete sessions inactive beyond this many days — and every table belonging to them |
-| `backup` | `false` | Pre-prune snapshot at `<db_path>.bak`. `true` = restore point on failure, but prune + compact costs two `VACUUM` passes (roughly twice the time). `false` = single `VACUUM` pass |
 | `db_path` | *auto-detected* | Optional override for opencode's database location |
 | `log_level` | `"info"` | `"silent"`, `"error"`, `"info"`, `"debug"` |
 | `vacuum_min_gb` | `1` | Only `VACUUM` when the db file is ≥ N GB; `0` = always vacuum after a prune |
@@ -126,27 +118,26 @@ tail -f ~/.config/opencode/db-prunetor.log
 [2026-08-25T12:39:32] [INFO]: Pruned rows total: 292947
 [2026-08-25T12:39:34] [INFO]: Vacuum + wal checkpoint done
 [2026-08-25T12:39:34] [INFO]: Report — db: 636.8 MB, wal: 0 B, shm: 1.3 MB, bak: none
-[2026-08-25T12:39:34] [INFO]: Disposed
+[2026-08-25T12:39:34] [INFO]: Maintenance complete
 [2026-08-25T12:45:00] [INFO]: Integrity check: ok
 [2026-08-25T12:45:00] [INFO]: No prune needed
 [2026-08-25T12:45:00] [INFO]: Report — db: 636.8 MB, wal: 4.0 MB, shm: 32.0 KB, bak: none
-[2026-08-25T12:45:00] [INFO]: Disposed
+[2026-08-25T12:45:00] [INFO]: Maintenance complete
 [2026-08-25T13:00:00] [INFO]: Integrity check: ok
 [2026-08-25T13:00:01] [INFO]: Pruned rows total: 12345
 [2026-08-25T13:00:01] [INFO]: Compaction deferred (database in use by another instance): database is locked
 [2026-08-25T13:00:01] [INFO]: Report — db: 700.0 MB, wal: 12.0 MB, shm: 32.0 KB, bak: none
-[2026-08-25T13:00:01] [INFO]: Disposed
+[2026-08-25T13:00:01] [INFO]: Maintenance complete
 ```
 
 ## 💬 Notes
 
-- **Runs on close, not on startup** — when opencode finishes a session, it releases its database. That's the perfect moment: minimal contention, zero impact on how fast sessions start.
+- **Runs on startup, off the main thread** — the plugin spawns a detached Worker that prunes while you're already using opencode, so startup is never blocked.
 - **Health first** — nothing is touched until the database proves it's healthy.
-- **Snapshot before surgery** — a consistent backup is written to `<db_path>.bak` before anything is deleted, without locking the live database. On success it is removed automatically; on failure it stays as a restore point. With `"backup": false` there is no snapshot: the prune becomes a single `VACUUM` pass, but a failed prune has nothing to restore from. The log reports whether backup is configured (`bak: enabled` / `bak: none`) — no sizes.
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days. Its whole subtree goes with it; recent sessions are never touched.
 - **Orphaned rows go too** — parts, messages, events and todos whose session no longer exists (cleared or migrated sessions) are swept on the same run, so nothing dangles.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
-- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every close. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — the last instance to close usually does the compaction.
+- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every startup. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — a quiet window (typically when no other instance holds the DB) does the compaction.
 - **Size-aware compaction** — `VACUUM` only runs when the database file is at least `vacuum_min_gb` (default `1` GB); smaller databases get a WAL checkpoint only, skipping the heavier `VACUUM` pass. Set `vacuum_min_gb: 0` to always `VACUUM` after a prune.
 - **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
@@ -159,4 +150,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 0.1.15
+MIT — version 1.1.20
