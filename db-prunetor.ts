@@ -24,7 +24,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.21
+*	@version 1.1.22
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -216,7 +216,6 @@ class DbPrunetor
 			 PRAGMA auto_vacuum        = OFF ;
 			 PRAGMA synchronous        = NORMAL ;
 			 PRAGMA temp_store         = MEMORY ;
-			 PRAGMA page_size          = 8192 ;
 			 PRAGMA cache_size         = 25000 ;
 			 PRAGMA cache_spill        = ON ;
 			 PRAGMA automatic_index    = ON ;
@@ -332,7 +331,9 @@ class DbPrunetor
 	}
 
 	// Atomic single-instance guard: exclusive-create (wx) so two opencode
-	// instances sharing one DB can never prune at once.
+	// instances sharing one DB can never prune at once. A lock whose owner PID
+	// is gone (opencode may kill the worker mid-run) is stale and is stolen;
+	// otherwise it would block every future run forever.
 	protected acquireLock( lock : string ) : boolean
 	{
 		try
@@ -342,8 +343,39 @@ class DbPrunetor
 		}
 		catch
 		{
+			if ( this.isStale( lock ) )
+			{
+				rmSync( lock, { force : true } ) ;
+
+				try
+				{
+					writeFileSync( lock, String( process.pid ), { flag : "wx" } ) ;
+					return true ;
+				}
+				catch {}
+			}
+
 			log( LOG_LEVEL.INFO, "Another prune already running — skip" ) ;
 			return false ;
+		}
+	}
+
+	// A lock is stale when its owner PID is not alive anymore (ESRCH) or the
+	// file is unreadable/empty. EPERM means the process exists — keep waiting.
+	protected isStale( lock : string ) : boolean
+	{
+		try
+		{
+			const owner = Number( readFileSync( lock, "utf-8" ).trim() ) ;
+
+			if ( ! Number.isFinite( owner ) || owner <= 0 ) return true ;
+
+			process.kill( owner, 0 ) ;
+			return false ;
+		}
+		catch ( err )
+		{
+			return ( err as NodeJS.ErrnoException ).code !== "EPERM" ;
 		}
 	}
 
@@ -354,39 +386,34 @@ class DbPrunetor
 	}
 
 	// Orchestrate maintenance on an open connection: a linear pipeline of
-	// small stages, each a method above.
+	// small stages, each a method above. Cleanup (close + release lock) lives
+	// only in the finally, so every early return leaves no residue behind.
 	public async run() : Promise<void>
 	{
 		const dbPath = this.config.db_path ;
 		const lock   = dbPath + ".prune.lock" ;
+		let completed = false ;
 
 		if ( ! this.acquireLock( lock ) ) return ;
 
-		if ( ! existsSync( dbPath ) )
-		{
-			log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
-			this.releaseLock( lock ) ;
-			return ;
-		}
-
 		try
 		{
-			this.connect( dbPath ) ;
-
-			if ( ! this.integrityOk() )
+			if ( ! existsSync( dbPath ) )
 			{
-				this.disconnect() ;
-				this.releaseLock( lock ) ;
+				log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
 				return ;
 			}
+
+			this.connect( dbPath ) ;
+
+			if ( ! this.integrityOk() ) return ;
 
 			const deleted = this.prune( this.config.prune_days ) ;
 
 			if ( deleted === 0 )
 			{
 				log( LOG_LEVEL.INFO, "No prune needed" ) ;
-				this.disconnect() ;
-				this.releaseLock( lock ) ;
+				completed = true ;
 				return ;
 			}
 
@@ -394,6 +421,7 @@ class DbPrunetor
 			this.optimize() ;
 			this.compact() ;
 			this.report() ;
+			completed = true ;
 		}
 		catch ( err )
 		{
@@ -405,7 +433,7 @@ class DbPrunetor
 			this.releaseLock( lock ) ;
 		}
 
-		log( LOG_LEVEL.INFO, "Maintenance complete" ) ;
+		if ( completed ) log( LOG_LEVEL.INFO, "Maintenance complete" ) ;
 	}
 }
 
@@ -453,7 +481,7 @@ export default ( async () =>
 
 		worker.on( "exit", ( code ) =>
 		{
-			notify( code === 0 ? "Pruning complete." : "Pruning deferred (db in use)." ) ;
+			notify( code === 0 ? "Pruning complete." : "Pruning failed (see log)." ) ;
 		} ) ;
 
 		worker.on( "error", () =>
