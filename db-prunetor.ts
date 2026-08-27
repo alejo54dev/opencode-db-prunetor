@@ -4,10 +4,11 @@
 *	OpenCode plugin — lightweight maintenance of opencode's SQLite DB
 *	(~/.local/share/opencode/opencode.db). Runs on startup in a nested Worker
 *	off the backend event loop (workerData marker, never parentPort, to avoid
-*	a double run). Verifies integrity, prunes tables of sessions inactive >
-*	prune_days (plus orphans and empty projects, FK order), refreshes stats,
-*	and compacts (VACUUM + WAL truncate) only after a real prune and only when
-*	the DB is at least vacuum_min_gb. Safe while opencode is live (WAL).
+*	a double run). Verifies integrity, prunes sessions inactive > prune_days
+*	(ON DELETE CASCADE removes all their tables; event_sequence and empty
+*	projects are swept explicitly), refreshes stats, and compacts (VACUUM +
+*	WAL truncate) only after a real prune and only when the DB is at least
+*	vacuum_min_gb. Safe while opencode is live (WAL).
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -23,7 +24,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.20
+*	@version 1.1.21
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
@@ -187,32 +188,6 @@ function fileSize( p : string ) : string
 	}
 }
 
-// ─── Prune tables ──────────────────────────────────────────────────────────
-
-// Child tables of a session, by the foreign-key column that points at it.
-// A row is dead when its session is old OR its session no longer exists, so a
-// single DELETE per table covers both the cascade and the orphan sweep.
-const SESSION_CHILDREN =
-[
-	{ table : "part",                  col : "session_id" },
-	{ table : "message",               col : "session_id" },
-	{ table : "event",                 col : "aggregate_id" },
-	{ table : "event_sequence",        col : "aggregate_id" },
-	{ table : "todo",                  col : "session_id" },
-	{ table : "session_message",       col : "session_id" },
-	{ table : "session_share",         col : "session_id" },
-	{ table : "session_input",         col : "session_id" },
-	{ table : "session_context_epoch", col : "session_id" }
-] ;
-
-// Child tables of a project, by the foreign-key column that points at it.
-const PROJECT_CHILDREN =
-[
-	{ table : "permission",         col : "project_id" },
-	{ table : "workspace",          col : "project_id" },
-	{ table : "project_directory",  col : "project_id" }
-] ;
-
 // ─── DbPrunetor ────────────────────────────────────────────────────────────
 
 // Controller class: holds all plugin state and logic.
@@ -273,71 +248,28 @@ class DbPrunetor
 		return ok ;
 	}
 
-	// Count rows a prune would touch: old sessions plus already-orphaned rows.
-	// Zero means there is nothing to do and we can skip straight to close.
-	protected countEligible( days : number ) : number
-	{
-		const row = this.db!.prepare(
-			`SELECT
-				( SELECT COUNT(*) FROM session WHERE time_updated < strftime( '%s', 'now', '-' || ? || ' days' ) * 1000 )
-				+ ( SELECT COUNT(*) FROM part            WHERE session_id   NOT IN ( SELECT id FROM session ) )
-				+ ( SELECT COUNT(*) FROM message         WHERE session_id   NOT IN ( SELECT id FROM session ) )
-				+ ( SELECT COUNT(*) FROM event           WHERE aggregate_id NOT IN ( SELECT id FROM session ) )
-				+ ( SELECT COUNT(*) FROM event_sequence  WHERE aggregate_id NOT IN ( SELECT id FROM session ) )
-				+ ( SELECT COUNT(*) FROM todo            WHERE session_id   NOT IN ( SELECT id FROM session ) )
-				+ ( SELECT COUNT(*) FROM session_message WHERE session_id   NOT IN ( SELECT id FROM session ) )
-				AS c`
-		).get( days ) as { c : number } ;
-
-		return row.c ;
-	}
-
-	// One transaction, explicit ordered deletes — no triggers, no duplicated
-	// orphan sweep. Children of old sessions and orphaned children are removed
-	// in the same statement; then the sessions themselves, the dangling
-	// parent_id links, empty projects and their children.
+	// One transaction, foreign-key cascade does the work. opencode's schema
+	// declares ON DELETE CASCADE for every child of session and project, so a
+	// single DELETE FROM session drags parts, messages, the event journal,
+	// session metadata and the sessions' own children with it. event_sequence
+	// has no FK to session (event cascades from it), so it is swept
+	// explicitly; empty projects and dangling parent_id links go too.
 	protected prune( days : number ) : number
 	{
 		const cutoff = `strftime( '%s', 'now', '-' || ${ days } || ' days' ) * 1000` ;
 
 		const before = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c ;
 
-		this.db!.exec( "BEGIN" ) ;
-
-		for ( const child of SESSION_CHILDREN )
-		{
-			this.db!.exec(
-				`DELETE FROM ${ child.table }
-				 WHERE ${ child.col } IN ( SELECT id FROM session WHERE time_updated < ${ cutoff } )
-				    OR ${ child.col } NOT IN ( SELECT id FROM session )`
-			) ;
-		}
-
 		this.db!.exec(
-			`UPDATE session SET parent_id = NULL
-			 WHERE parent_id IS NOT NULL AND parent_id NOT IN ( SELECT id FROM session ) ;
-			 DELETE FROM session WHERE time_updated < ${ cutoff } ;`
+			`BEGIN ;
+			 DELETE FROM session WHERE time_updated < ${ cutoff } ;
+			 UPDATE session SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN ( SELECT id FROM session ) ;
+			 DELETE FROM event_sequence WHERE aggregate_id NOT IN ( SELECT id FROM session ) ;
+			 DELETE FROM project WHERE NOT EXISTS ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;
+			 COMMIT ;`
 		) ;
 
-		for ( const child of PROJECT_CHILDREN )
-		{
-			this.db!.exec(
-				`DELETE FROM ${ child.table }
-				 WHERE ${ child.col } NOT IN ( SELECT DISTINCT project_id FROM session WHERE project_id IS NOT NULL )`
-			) ;
-		}
-
-		this.db!.exec(
-			`DELETE FROM project WHERE NOT EXISTS ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;`
-		) ;
-
-		this.db!.exec( "COMMIT" ) ;
-
-		const deleted = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c - before ;
-
-		log( LOG_LEVEL.INFO, `Pruned rows total: ${ deleted }` ) ;
-
-		return deleted ;
+		return ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c - before ;
 	}
 
 	// Refresh planner statistics (VACUUM below already rebuilds indexes)
@@ -448,9 +380,9 @@ class DbPrunetor
 				return ;
 			}
 
-			const eligible = this.countEligible( this.config.prune_days ) ;
+			const deleted = this.prune( this.config.prune_days ) ;
 
-			if ( eligible === 0 )
+			if ( deleted === 0 )
 			{
 				log( LOG_LEVEL.INFO, "No prune needed" ) ;
 				this.disconnect() ;
@@ -458,7 +390,7 @@ class DbPrunetor
 				return ;
 			}
 
-			this.prune( this.config.prune_days ) ;
+			log( LOG_LEVEL.INFO, `Pruned rows total: ${ deleted }` ) ;
 			this.optimize() ;
 			this.compact() ;
 			this.report() ;

@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-1.1.20-blue)
+![Version](https://img.shields.io/badge/version-1.1.21-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -16,9 +16,7 @@
 
 - **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. A single transaction issues explicit, ordered `DELETE`s — children of old sessions and already-orphaned rows are removed by the same statement (so nothing dangles), then the sessions, the dangling `parent_id` links, and finally empty projects and their children.
-
-- **Orphan sweep** — rows left behind when opencode itself deletes sessions (cleared or migrated) are dead weight; they get swept on the same run.
+- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. The database's own foreign keys (`ON DELETE CASCADE`) do the cascade: a single `DELETE FROM session` drags the whole subtree — parts, messages, todos, shares, inputs, context epochs — inside one transaction. Only `event_sequence` (the one child table with no FK to session) and empty projects are swept explicitly. Nothing dangles.
 
 - **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically when no other instance holds the DB) instead of failing.
 
@@ -36,20 +34,18 @@ flowchart TD
     A --> B["🗄️ Open its own connection<br/>(safe speed settings, discarded after)"]
     B --> C{"Database<br/>healthy?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
-    C -->|"✅ yes"| D["📋 Count eligible sets<br/>sessions inactive > prune_days<br/>+ orphan rows"]
-    D --> E{"Eligible sessions<br/>or orphans?"}
+    C -->|"✅ yes"| G["🧹 One transaction, FK cascade:<br/>DELETE session → all children<br/>+ empty projects"]
+    G --> E{"Rows<br/>deleted?"}
     E -->|"❌ no"| R["📝 Log: no prune needed"]
-    E -->|"✅ yes"| G["🧹 One transaction, explicit ordered deletes:<br/>children of old sessions + orphans<br/>+ empty projects"]
-    G --> I["📊 Refresh planner stats (PRAGMA optimize)"]
+    E -->|"✅ yes"| I["📊 Refresh planner stats (PRAGMA optimize)"]
     I --> M["🗜️ Compact<br/>VACUUM if db ≥ vacuum_min_gb (else WAL checkpoint)<br/>deferred if DB in use"]
-    R --> J["📋 Log report (sizes)"]
-    M --> J
+    M --> J["📋 Log report (sizes)"]
+    R --> K
     J --> K["🔚 Close connection"]
 
     style A fill:#1a1a2e,stroke:#e94560,color:#fff
     style B fill:#0f3460,stroke:#53a8b6,color:#fff
     style C fill:#16213e,stroke:#e94560,color:#fff
-    style D fill:#0f3460,stroke:#53a8b6,color:#fff
     style E fill:#16213e,stroke:#e94560,color:#fff
     style G fill:#0f3460,stroke:#53a8b6,color:#fff
     style I fill:#0f3460,stroke:#53a8b6,color:#fff
@@ -66,7 +62,7 @@ flowchart TD
 
 **Replay safety.** Event-sourcing rows are only needed to reconstruct old sessions. Once a session goes inactive, its rows are dead weight — and a session that goes inactive for good is removed entirely, along with the project that ends up empty.
 
-**Peace of mind.** An integrity gate plus an automatic online backup means a prune can never be the thing that breaks your history.
+**Peace of mind.** An integrity gate means a prune can never be the thing that breaks your history.
 
 ## 🚀 Installation
 
@@ -150,4 +146,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 1.1.20
+MIT — version 1.1.21
