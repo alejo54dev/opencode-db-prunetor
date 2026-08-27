@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-1.1.22-blue)
+![Version](https://img.shields.io/badge/version-1.1.23-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -146,4 +146,4 @@ Less is more. :)
 
 ## 📄 License
 
-MIT — version 1.1.22
+MIT — version 1.1.23

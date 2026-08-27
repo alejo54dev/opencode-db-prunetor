@@ -24,7 +24,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.22
+*	@version 1.1.23
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license MIT
