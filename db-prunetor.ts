@@ -27,7 +27,7 @@
 *	@version 1.1.23
 *	@author Alejandro Carraretto
 *	@assistant Hy3
-*	@license Apache-2.0
+*	@license AGPL-3.0
 *	@compatibility OpenCode v1
 */
 

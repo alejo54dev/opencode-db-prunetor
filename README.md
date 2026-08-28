@@ -1,7 +1,7 @@
 # DB Prunetor (keep opencode's brain lean)
 
 ![Version](https://img.shields.io/badge/version-1.1.23-blue)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![License](https://img.shields.io/badge/license-AGPL%203.0-blue)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
 > opencode's SQLite database grows forever. Event-sourcing rows pile up from sessions you'll never reopen. Your AI should not choke on its own history.
@@ -146,4 +146,4 @@ Less is more. :)
 
 ## 📄 License
 
-Apache-2.0 — version 1.1.23
+AGPL-3.0 — version 1.1.23
