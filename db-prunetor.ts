@@ -7,8 +7,9 @@
 *	a double run). Verifies integrity, prunes sessions inactive > prune_days
 *	(ON DELETE CASCADE removes all their tables; event_sequence and empty
 *	projects are swept explicitly), refreshes stats, and compacts (VACUUM +
-*	WAL truncate) only after a real prune and only when the DB is at least
-*	vacuum_min_gb. Safe while opencode is live (WAL).
+*	WAL truncate) only when the DB is at least vacuum_min_gb; a small DB skips
+*	VACUUM but still truncates the WAL (also on a no-prune run). Safe while
+*	opencode is live (WAL).
 *
 *	Install: cp db-prunetor.ts ~/.config/opencode/plugins/db-prunetor.ts
 *	Config:  ~/.config/opencode/db-prunetor.jsonc
@@ -16,15 +17,15 @@
 *
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
-*		"enabled": true,
-*		"prune_days": 30,
-*		// "db_path":
-*		"log_level": "info",
-*		"vacuum_min_gb": 1
+*		"enabled": true,             // master switch
+*		"prune_days": 30,            // delete sessions inactive > N days (and all their data)
+*		// "db_path":                // optional override; auto-detected if omitted
+*		"vacuum_min_gb": 1,          // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
+*		"log_level": "info",         // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.23
+*	@version 1.1.24
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license AGPL-3.0
@@ -46,12 +47,12 @@ const LOG_FILE    = join( CONFIG_DIR, "db-prunetor.log" ) ;
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-const CONFIG =
+const CONFIG : Config =
 {
 	enabled: true,
 	prune_days: 30,
 	db_path: resolveDbPath(),
-	log_level: "info" as "silent" | "error" | "info" | "debug",
+	log_level: "info",
 	vacuum_min_gb: 1,
 } ;
 
@@ -70,8 +71,14 @@ interface Config
 	enabled        : boolean ;
 	prune_days     : number ;
 	db_path        : string ;
-	log_level      : string ;
+	log_level      : "silent" | "error" | "info" | "debug" ;
 	vacuum_min_gb  : number ;
+}
+
+interface PruneWorkerData
+{
+	dbPrunetorRole? : string ;
+	config? : Config ;
 }
 
 // ─── Global Helpers ──────────────────────────────────────────────────────────
@@ -87,7 +94,7 @@ function timestamp() : string
 }
 
 // Load config from ~/.config/opencode/db-prunetor.jsonc, fall back to defaults
-function loadConfig() : typeof CONFIG
+function loadConfig() : Config
 {
 	let file : Record<string, unknown> = {} ;
 	try
@@ -194,11 +201,11 @@ function fileSize( p : string ) : string
 // Controller class: holds all plugin state and logic.
 class DbPrunetor
 {
-	private config : typeof CONFIG ;
+	private config : Config ;
 	private db : Database | null = null ;
 
 	// Initialize: store config, no side effects, no DB open
-	constructor( config : typeof CONFIG )
+	constructor( config : Config )
 	{
 		this.config = config ;
 	}
@@ -257,7 +264,6 @@ class DbPrunetor
 	protected prune( days : number ) : number
 	{
 		const cutoff = `strftime( '%s', 'now', '-' || ${ days } || ' days' ) * 1000` ;
-
 		const before = ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c ;
 
 		this.db!.exec(
@@ -272,25 +278,17 @@ class DbPrunetor
 		return ( this.db!.prepare( "SELECT total_changes() AS c" ).get() as { c : number } ).c - before ;
 	}
 
-	// Refresh planner statistics (VACUUM below already rebuilds indexes)
-	protected optimize() : void
-	{
-		this.db!.exec( "PRAGMA optimize" ) ;
-	}
-
 	// Reclaim space — but only when no other instance holds the DB. opencode
 	// may run several instances sharing one DB over WAL; a closing instance
-	// must not block or fail while siblings are live. Probe with BEGIN
-	// IMMEDIATE (short timeout): if we take the lock the DB is quiet — VACUUM
-	// + wal_checkpoint(TRUNCATE) runs, gated by vacuum_min_gb. If BUSY, another
-	// instance is active: defer compaction (the data is already pruned).
+	// must not block or fail while siblings are live. VACUUM runs with a short
+	// busy_timeout so a busy DB (another instance) fails fast and defers
+	// instead of blocking; gated by vacuum_min_gb, so a small DB skips VACUUM
+	// and just refreshes stats + truncates the WAL.
 	protected compact() : void
 	{
 		try
 		{
 			this.db!.exec( "PRAGMA busy_timeout = 1000" ) ;
-			this.db!.exec( "BEGIN IMMEDIATE" ) ;
-			this.db!.exec( "COMMIT" ) ;
 
 			const dbBytes  = ( () =>
 			{
@@ -302,15 +300,16 @@ class DbPrunetor
 
 			if ( threshold > 0 && dbBytes < threshold )
 			{
-				log( LOG_LEVEL.INFO,
-					`Vacuum skipped — db ${ fileSize( this.config.db_path ) } ` +
-					`below ${ this.config.vacuum_min_gb }GB threshold` ) ;
+				this.db!.exec( "PRAGMA optimize" ) ;
 				this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
 			}
 			else
 			{
-				this.db!.exec( "PRAGMA page_size = 8192 ; VACUUM ; PRAGMA wal_checkpoint(TRUNCATE)" ) ;
-				log( LOG_LEVEL.INFO, "Vacuum + wal checkpoint done" ) ;
+				this.db!.exec( "PRAGMA page_size = 8192 ; VACUUM" ) ;
+				this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+
+				log( LOG_LEVEL.INFO, "VACUUM + WAL checkpoint done" ) ;
+				this.report() ;
 			}
 		}
 		catch ( err )
@@ -319,7 +318,7 @@ class DbPrunetor
 		}
 	}
 
-	// Log database / wal / shm sizes
+	// Log database / wal / shm sizes (emitted after a real VACUUM)
 	protected report() : void
 	{
 		const dbPath = this.config.db_path ;
@@ -393,12 +392,18 @@ class DbPrunetor
 	{
 		const dbPath = this.config.db_path ;
 		const lock   = dbPath + ".prune.lock" ;
-		let completed = false ;
 
-		if ( ! this.acquireLock( lock ) ) return ;
+		let completed = false ;
+		let locked = false ;
 
 		try
 		{
+			if ( dbPath === ":memory:" )
+			{
+				log( LOG_LEVEL.INFO, "In-memory database — skipping" ) ;
+				return ;
+			}
+
 			if ( ! existsSync( dbPath ) )
 			{
 				log( LOG_LEVEL.ERROR, `Database not found at ${ dbPath } — skipping` ) ;
@@ -409,19 +414,24 @@ class DbPrunetor
 
 			if ( ! this.integrityOk() ) return ;
 
+			if ( ! this.acquireLock( lock ) ) return ;
+			locked = true ;
+
 			const deleted = this.prune( this.config.prune_days ) ;
 
 			if ( deleted === 0 )
 			{
+				// Nothing to prune — truncate the WAL cheaply so it stays bounded
+				this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
+
 				log( LOG_LEVEL.INFO, "No prune needed" ) ;
 				completed = true ;
 				return ;
 			}
 
 			log( LOG_LEVEL.INFO, `Pruned rows total: ${ deleted }` ) ;
-			this.optimize() ;
+
 			this.compact() ;
-			this.report() ;
 			completed = true ;
 		}
 		catch ( err )
@@ -431,7 +441,7 @@ class DbPrunetor
 		finally
 		{
 			this.disconnect() ;
-			this.releaseLock( lock ) ;
+			if ( locked ) this.releaseLock( lock ) ;
 		}
 
 		if ( completed ) log( LOG_LEVEL.INFO, "Maintenance complete" ) ;
@@ -446,17 +456,13 @@ class DbPrunetor
 // spawn a nested Worker carrying a workerData marker and run maintenance ONLY
 // when that marker is present. The nested Worker keeps the synchronous VACUUM
 // off opencode's backend event loop, so startup never freezes.
-const IS_PRUNE_WORKER = workerData != null && ( workerData as { dbPrunetorRole? : string } ).dbPrunetorRole === "prune" ;
+const wd = workerData as PruneWorkerData ;
+const IS_PRUNE_WORKER = wd?.dbPrunetorRole === "prune" ;
 
 if ( IS_PRUNE_WORKER )
 {
-	const cfg = ( workerData as { config? : typeof CONFIG } ).config ?? loadConfig() ;
-	const inst = new DbPrunetor( cfg ) ;
-
-	( async () =>
-	{
-		await inst.run() ;
-	} )() ;
+	const inst = new DbPrunetor( wd.config ?? loadConfig() ) ;
+	inst.run() ;
 }
 
 // ─── Plugin ────────────────────────────────────────────────────────────────

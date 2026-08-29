@@ -1,6 +1,6 @@
 # DB Prunetor (keep opencode's brain lean)
 
-![Version](https://img.shields.io/badge/version-1.1.23-blue)
+![Version](https://img.shields.io/badge/version-1.1.24-blue)
 ![License](https://img.shields.io/badge/license-AGPL%203.0-blue)
 ![OpenCode v1](https://img.shields.io/badge/OpenCode-v1-purple)
 
@@ -18,7 +18,7 @@
 
 - **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. The database's own foreign keys (`ON DELETE CASCADE`) do the cascade: a single `DELETE FROM session` drags the whole subtree — parts, messages, todos, shares, inputs, context epochs — inside one transaction. Only `event_sequence` (the one child table with no FK to session) and empty projects are swept explicitly. Nothing dangles.
 
-- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically when no other instance holds the DB) instead of failing.
+- **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically when no other instance holds the DB) instead of failing. On a run with nothing to prune, the WAL is still truncated cheaply so it stays bounded.
 
 ## 🧠 Philosophy
 
@@ -36,21 +36,27 @@ flowchart TD
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
     C -->|"✅ yes"| G["🧹 One transaction, FK cascade:<br/>DELETE session → all children<br/>+ empty projects"]
     G --> E{"Rows<br/>deleted?"}
-    E -->|"❌ no"| R["📝 Log: no prune needed"]
-    E -->|"✅ yes"| I["📊 Refresh planner stats (PRAGMA optimize)"]
-    I --> M["🗜️ Compact<br/>VACUUM if db ≥ vacuum_min_gb (else WAL checkpoint)<br/>deferred if DB in use"]
-    M --> J["📋 Log report (sizes)"]
+    E -->|"❌ no"| R["🗜️ Truncate WAL<br/>📝 Log: no prune needed"]
     R --> K
+    E -->|"✅ yes"| H{"db ≥ vacuum_min_gb?"}
+    H -->|"❌ no"| O["📊 PRAGMA optimize<br/>+ WAL truncate"]
+    H -->|"✅ yes"| M["🗜️ VACUUM + WAL truncate"]
+    M --> J["📋 Log: VACUUM + WAL checkpoint done<br/>Log report (sizes)"]
+    M -->|"⚠️ DB in use"| D["📝 Log: Compaction deferred"]
+    O --> K
     J --> K["🔚 Close connection"]
+    D --> K
 
     style A fill:#1a1a2e,stroke:#e94560,color:#fff
     style B fill:#0f3460,stroke:#53a8b6,color:#fff
     style C fill:#16213e,stroke:#e94560,color:#fff
     style E fill:#16213e,stroke:#e94560,color:#fff
     style G fill:#0f3460,stroke:#53a8b6,color:#fff
-    style I fill:#0f3460,stroke:#53a8b6,color:#fff
+    style H fill:#16213e,stroke:#e94560,color:#fff
+    style O fill:#0f3460,stroke:#53a8b6,color:#fff
     style M fill:#0f3460,stroke:#53a8b6,color:#fff
     style J fill:#1a1a2e,stroke:#e94560,color:#fff
+    style D fill:#1a1a2e,stroke:#e94560,color:#fff
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
     style R fill:#1a1a2e,stroke:#e94560,color:#fff
     style Z fill:#1a1a2e,stroke:#e94560,color:#fff
@@ -97,8 +103,6 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 
 **Database location is automatic.** The plugin resolves opencode's database the same way opencode itself does: it honors the `OPENCODE_DB` environment variable, and otherwise falls back to the stable default `<dataDir>/opencode.db` (`$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`). You only set `db_path` to override when necessary.
 
-The pre-prune backup is written automatically to `<db_path>.bak` (same directory as the database). It is a temporary safety net: kept only if maintenance fails, removed once the prune succeeds. No configuration needed — unless you want speed over safety: with `"backup": false` the snapshot is skipped entirely and a prune costs a single `VACUUM` pass instead of two.
-
 ## 🪵 Logs
 
 `~/.config/opencode/db-prunetor.log` (append-only). Format: `[TIMESTAMP] [LEVEL] message`.
@@ -112,17 +116,15 @@ tail -f ~/.config/opencode/db-prunetor.log
 [2026-08-25T12:39:29] [INFO]: Initialized
 [2026-08-25T12:39:30] [INFO]: Integrity check: ok
 [2026-08-25T12:39:32] [INFO]: Pruned rows total: 292947
-[2026-08-25T12:39:34] [INFO]: Vacuum + wal checkpoint done
-[2026-08-25T12:39:34] [INFO]: Report — db: 636.8 MB, wal: 0 B, shm: 1.3 MB, bak: none
+[2026-08-25T12:39:34] [INFO]: VACUUM + WAL checkpoint done
+[2026-08-25T12:39:34] [INFO]: Report — db: 636.8 MB, wal: 0 B, shm: 1.3 MB
 [2026-08-25T12:39:34] [INFO]: Maintenance complete
 [2026-08-25T12:45:00] [INFO]: Integrity check: ok
 [2026-08-25T12:45:00] [INFO]: No prune needed
-[2026-08-25T12:45:00] [INFO]: Report — db: 636.8 MB, wal: 4.0 MB, shm: 32.0 KB, bak: none
 [2026-08-25T12:45:00] [INFO]: Maintenance complete
 [2026-08-25T13:00:00] [INFO]: Integrity check: ok
 [2026-08-25T13:00:01] [INFO]: Pruned rows total: 12345
 [2026-08-25T13:00:01] [INFO]: Compaction deferred (database in use by another instance): database is locked
-[2026-08-25T13:00:01] [INFO]: Report — db: 700.0 MB, wal: 12.0 MB, shm: 32.0 KB, bak: none
 [2026-08-25T13:00:01] [INFO]: Maintenance complete
 ```
 
@@ -133,7 +135,7 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days. Its whole subtree goes with it; recent sessions are never touched.
 - **Orphaned rows go too** — parts, messages, events and todos whose session no longer exists (cleared or migrated sessions) are swept on the same run, so nothing dangles.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
-- **Space is really reclaimed** — compaction (`VACUUM` + WAL truncate) only runs after a real prune, so the file actually shrinks without paying the cost on every startup. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — a quiet window (typically when no other instance holds the DB) does the compaction.
+- **Space is really reclaimed** — a real `VACUUM` runs only after a real prune, so the file actually shrinks without paying the cost on every startup; when nothing is pruned only the WAL is truncated. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — a quiet window (typically when no other instance holds the DB) does the compaction.
 - **Size-aware compaction** — `VACUUM` only runs when the database file is at least `vacuum_min_gb` (default `1` GB); smaller databases get a WAL checkpoint only, skipping the heavier `VACUUM` pass. Set `vacuum_min_gb: 0` to always `VACUUM` after a prune.
 - **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
 
@@ -146,4 +148,4 @@ Less is more. :)
 
 ## 📄 License
 
-AGPL-3.0 — version 1.1.23
+AGPL-3.0 — version 1.1.24
