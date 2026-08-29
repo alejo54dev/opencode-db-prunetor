@@ -30,18 +30,18 @@ The plugin never blocks you, never touches opencode's own connection settings, a
 
 ```mermaid
 flowchart TD
-    A["🚀 opencode starts<br/>plugin spawns detached Worker"]
-    A --> B["🗄️ Open its own connection<br/>(safe speed settings, discarded after)"]
-    B --> C{"Database<br/>healthy?"}
+    A["🚀 opencode starts<br/>spawns detached Worker"]
+    A --> B["🗄️ Open connection<br/>(safe settings)"]
+    B --> C{"DB healthy?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
-    C -->|"✅ yes"| G["🧹 One transaction, FK cascade:<br/>DELETE session → all children<br/>+ empty projects"]
-    G --> E{"Rows<br/>deleted?"}
-    E -->|"❌ no"| R["🗜️ Truncate WAL<br/>📝 Log: no prune needed"]
+    C -->|"✅ yes"| G["🧹 One txn, FK cascade:<br/>DELETE session → all children<br/>+ empty projects"]
+    G --> E{"Rows deleted?"}
+    E -->|"❌ no"| R["🗜️ WAL truncate<br/>📝 Log: no prune needed"]
     R --> K
     E -->|"✅ yes"| H{"db ≥ vacuum_min_gb?"}
     H -->|"❌ no"| O["📊 PRAGMA optimize<br/>+ WAL truncate"]
     H -->|"✅ yes"| M["🗜️ VACUUM + WAL truncate"]
-    M --> J["📋 Log: VACUUM + WAL checkpoint done<br/>Log report (sizes)"]
+    M --> J["📋 VACUUM + WAL checkpoint done<br/>Report (sizes)"]
     M -->|"⚠️ DB in use"| D["📝 Log: Compaction deferred"]
     O --> K
     J --> K["🔚 Close connection"]
