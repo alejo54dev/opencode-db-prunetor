@@ -25,7 +25,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.24
+*	@version 1.1.25
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license AGPL-3.0
@@ -485,20 +485,10 @@ export default ( async () =>
 	try
 	{
 		const worker = new Worker( new URL( import.meta.url ), { workerData : { dbPrunetorRole : "prune", config : opts } } ) ;
-
-		worker.on( "exit", ( code ) =>
-		{
-			notify( code === 0 ? "Pruning complete." : "Pruning failed (see log)." ) ;
-		} ) ;
-
-		worker.on( "error", () =>
-		{
-			notify( "Pruning failed (see log)." ) ;
-		} ) ;
 	}
 	catch ( err )
 	{
-		log( LOG_LEVEL.ERROR, `Worker spawn failed: ${ ( err as Error ).message }` ) ;
+		log( LOG_LEVEL.ERROR, `Pruning failed: ${ ( err as Error ).message }` ) ;
 	}
 
 	return {} ;
