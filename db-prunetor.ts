@@ -25,7 +25,7 @@
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.25
+ *	@version 1.1.26
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license AGPL-3.0
@@ -309,7 +309,6 @@ class DbPrunetor
 				this.db!.exec( "PRAGMA wal_checkpoint(TRUNCATE)" ) ;
 
 				log( LOG_LEVEL.INFO, "VACUUM + WAL checkpoint done" ) ;
-				this.report() ;
 			}
 		}
 		catch ( err )
@@ -432,6 +431,7 @@ class DbPrunetor
 			log( LOG_LEVEL.INFO, `Pruned rows total: ${ deleted }` ) ;
 
 			this.compact() ;
+			this.report() ;
 			completed = true ;
 		}
 		catch ( err )
