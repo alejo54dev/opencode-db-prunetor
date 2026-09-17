@@ -5,8 +5,8 @@
 *	(~/.local/share/opencode/opencode.db). Runs on startup in a nested Worker
 *	off the backend event loop (workerData marker, never parentPort, to avoid
 *	a double run). Verifies integrity, prunes sessions inactive > prune_days
-*	(ON DELETE CASCADE removes all their tables; event_sequence and empty
-*	projects are swept explicitly), refreshes stats, and compacts (VACUUM +
+*	(ON DELETE CASCADE removes all their tables; event_sequence is swept
+*	explicitly), refreshes stats, and compacts (VACUUM +
 *	WAL truncate) only when the DB is at least vacuum_min_gb; a small DB skips
 *	VACUUM but still truncates the WAL (also on a no-prune run). Safe while
 *	opencode is live (WAL).
@@ -25,7 +25,7 @@
 *	}
 *
 *	@name db-prunetor
- *	@version 1.1.26
+*	@version 1.1.29
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license AGPL-3.0
@@ -49,11 +49,11 @@ const LOG_FILE    = join( CONFIG_DIR, "db-prunetor.log" ) ;
 
 const CONFIG : Config =
 {
-	enabled: true,
-	prune_days: 30,
-	db_path: resolveDbPath(),
-	log_level: "info",
-	vacuum_min_gb: 1,
+	enabled       : true,
+	prune_days    : 30,
+	db_path       : resolveDbPath(),
+	log_level     : "info",
+	vacuum_min_gb : 1,
 } ;
 
 const LOG_LEVEL =
@@ -96,23 +96,24 @@ function timestamp() : string
 // Load config from ~/.config/opencode/db-prunetor.jsonc, fall back to defaults
 function loadConfig() : Config
 {
-	let file : Record<string, unknown> = {} ;
+	let file : Partial<Config> = {} ;
+	let loaded = false ;
 	try
 	{
-		file = Bun.JSONC.parse( readFileSync( CONFIG_FILE, "utf-8" ) ) ;
+		file = Bun.JSONC.parse( readFileSync( CONFIG_FILE, "utf8" ) ) as Partial<Config> ;
+		loaded = true ;
 	}
 	catch
 	{
 		log( LOG_LEVEL.ERROR, `Config not found or parse error at ${ CONFIG_FILE }` ) ;
 	}
 
-	CONFIG.enabled       = file.enabled                  ?? CONFIG.enabled ;
-	CONFIG.prune_days    = Math.max( 1, file.prune_days  ?? CONFIG.prune_days ) ;
-	CONFIG.db_path       = file.db_path ? resolvePath( String( file.db_path ) ) : resolveDbPath() ;
-	CONFIG.log_level     = file.log_level                ?? CONFIG.log_level ;
-	CONFIG.vacuum_min_gb = file.vacuum_min_gb            ?? CONFIG.vacuum_min_gb ;
+	Object.assign( CONFIG, file ) ;
 
-	log( LOG_LEVEL.INFO, "Config loaded" ) ;
+	CONFIG.prune_days = Math.max( 1, CONFIG.prune_days ) ;
+	CONFIG.db_path    = file.db_path ? resolvePath( String( file.db_path ) ) : resolveDbPath() ;
+
+	log( LOG_LEVEL.INFO, loaded ? "Config loaded" : "Config loaded (defaults)" ) ;
 
 	return CONFIG ;
 }
@@ -260,7 +261,9 @@ class DbPrunetor
 	// single DELETE FROM session drags parts, messages, the event journal,
 	// session metadata and the sessions' own children with it. event_sequence
 	// has no FK to session (event cascades from it), so it is swept
-	// explicitly; empty projects and dangling parent_id links go too.
+	// explicitly; dangling parent_id links are cleared too. Projects are never
+	// deleted: opencode keeps the current project row alive for session
+	// creation, and dropping an empty one breaks new sessions with FK errors.
 	protected prune( days : number ) : number
 	{
 		const cutoff = `strftime( '%s', 'now', '-' || ${ days } || ' days' ) * 1000` ;
@@ -271,7 +274,6 @@ class DbPrunetor
 			 DELETE FROM session WHERE time_updated < ${ cutoff } ;
 			 UPDATE session SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN ( SELECT id FROM session ) ;
 			 DELETE FROM event_sequence WHERE aggregate_id NOT IN ( SELECT id FROM session ) ;
-			 DELETE FROM project WHERE NOT EXISTS ( SELECT 1 FROM session s WHERE s.project_id = project.id ) ;
 			 COMMIT ;`
 		) ;
 
