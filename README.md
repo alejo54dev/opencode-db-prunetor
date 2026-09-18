@@ -16,7 +16,7 @@
 
 - **Integrity gate** — it first proves the database is healthy. A suspect database is never pruned.
 
-- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves, plus any projects left empty. The database's own foreign keys (`ON DELETE CASCADE`) do the cascade: a single `DELETE FROM session` drags the whole subtree — parts, messages, todos, shares, inputs, context epochs — inside one transaction. Only `event_sequence` (the one child table with no FK to session) and empty projects are swept explicitly. Nothing dangles.
+- **Full prune, correct order** — deletes all data for sessions inactive beyond `prune_days`: parts, messages, the event journal, session metadata and the sessions themselves. The database's own foreign keys (`ON DELETE CASCADE` with `PRAGMA foreign_keys = ON`) do the cascade: a single `DELETE FROM session` drags the whole subtree — parts, messages, todos, shares, inputs, context epochs — inside one transaction. Only `event_sequence` (the one child table with no FK to session) is swept explicitly, and dangling `parent_id` links are cleared. Projects are never deleted: opencode keeps the current project row alive for session creation. Nothing dangles.
 
 - **Reclaims the space** — after a real prune, the file is compacted (`VACUUM` + WAL truncate) so the freed space actually returns to disk, not just to the freelist. `VACUUM` needs an exclusive lock, so when several opencode instances share the DB it is deferred to a quiet window (typically when no other instance holds the DB) instead of failing. On a run with nothing to prune, the WAL is still truncated cheaply so it stays bounded.
 
@@ -34,7 +34,9 @@ flowchart TD
     A --> B["🗄️ Open connection<br/>(safe settings)"]
     B --> C{"DB healthy?"}
     C -->|"❌ no"| Z["🛑 Abort — no prune"]
-    C -->|"✅ yes"| G["🧹 One txn, FK cascade:<br/>DELETE session → all children<br/>+ empty projects"]
+    C -->|"✅ yes"| L["🔒 Acquire .prune.lock<br/>(wx create; stale PID stolen)"]
+    L -->|"❌ held"| K
+    L -->|"✅ free"| G["🧹 One txn, FK cascade:<br/>DELETE session → all children"]
     G --> E{"Rows deleted?"}
     E -->|"❌ no"| R["🗜️ WAL truncate<br/>📝 Log: no prune needed"]
     R --> K
@@ -60,13 +62,14 @@ flowchart TD
     style K fill:#1a1a2e,stroke:#e94560,color:#fff
     style R fill:#1a1a2e,stroke:#e94560,color:#fff
     style Z fill:#1a1a2e,stroke:#e94560,color:#fff
+    style L fill:#0f3460,stroke:#53a8b6,color:#fff
 ```
 
 ## 🎯 Use cases
 
 **Disk creep.** After weeks of sessions, `opencode.db` grows as parts, messages and the event journal pile up from sessions you'll never reopen. The plugin trims the dead weight on every startup.
 
-**Replay safety.** Event-sourcing rows are only needed to reconstruct old sessions. Once a session goes inactive, its rows are dead weight — and a session that goes inactive for good is removed entirely, along with the project that ends up empty.
+**Replay safety.** Event-sourcing rows are only needed to reconstruct old sessions. Once a session goes inactive, its rows are dead weight — and a session that goes inactive for good is removed entirely, cascade and all.
 
 **Peace of mind.** An integrity gate means a prune can never be the thing that breaks your history.
 
@@ -105,7 +108,7 @@ Copy `db-prunetor.jsonc` (included in this repo) to `~/.config/opencode/` and ed
 
 ## 🪵 Logs
 
-`~/.config/opencode/db-prunetor.log` (append-only). Format: `[TIMESTAMP] [LEVEL] message`.
+`~/.config/opencode/db-prunetor.log` (append-only). Format: `[TIMESTAMP] [LEVEL]: message`.
 
 ```bash
 tail -f ~/.config/opencode/db-prunetor.log
@@ -133,11 +136,11 @@ tail -f ~/.config/opencode/db-prunetor.log
 - **Runs on startup, off the main thread** — the plugin spawns a detached Worker that prunes while you're already using opencode, so startup is never blocked.
 - **Health first** — nothing is touched until the database proves it's healthy.
 - **Recency matters** — a session counts as "inactive" when it hasn't been touched in `prune_days` days. Its whole subtree goes with it; recent sessions are never touched.
-- **Orphaned rows go too** — parts, messages, events and todos whose session no longer exists (cleared or migrated sessions) are swept on the same run, so nothing dangles.
+- **Orphaned rows go too** — `event_sequence` rows whose session no longer exists (cleared or migrated sessions) and `parent_id` links pointing to deleted sessions are repaired on the same run, so nothing dangles.
 - **Your opencode stays untouched** — the plugin works on its own connection with sensible speed settings, discarded when the job is done. It never touches opencode's own connection.
 - **Space is really reclaimed** — a real `VACUUM` runs only after a real prune, so the file actually shrinks without paying the cost on every startup; when nothing is pruned only the WAL is truncated. When several opencode instances share the DB, `VACUUM` is deferred to a quiet window (logged as `Compaction deferred`) instead of failing — a quiet window (typically when no other instance holds the DB) does the compaction.
-- **Size-aware compaction** — `VACUUM` only runs when the database file is at least `vacuum_min_gb` (default `1` GB); smaller databases get a WAL checkpoint only, skipping the heavier `VACUUM` pass. Set `vacuum_min_gb: 0` to always `VACUUM` after a prune.
-- **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh). The cascade triggers are `TEMP`, so they never fire on a sibling instance's own deletes.
+- **Size-aware compaction** — `VACUUM` only runs when the database file is at least `vacuum_min_gb` (default `1` GB); smaller databases get `PRAGMA optimize` + a WAL truncate only, skipping the heavier `VACUUM` pass. Set `vacuum_min_gb: 0` to always `VACUUM` after a prune.
+- **Multi-instance safe** — opencode can run several instances on the same DB over WAL. The prune's `DELETE`s are safe with concurrent readers and only touch sessions inactive beyond `prune_days` (a live instance keeps its open session's `time_updated` fresh); an exclusive `.prune.lock` (created with `wx`, stale owner PID stolen) guarantees only one prune runs at a time.
 
 Less is more. :)
 
