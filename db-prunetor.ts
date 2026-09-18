@@ -98,6 +98,7 @@ function loadConfig() : Config
 {
 	let file : Partial<Config> = {} ;
 	let loaded = false ;
+
 	try
 	{
 		file = Bun.JSONC.parse( readFileSync( CONFIG_FILE, "utf8" ) ) as Partial<Config> ;
