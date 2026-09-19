@@ -4,10 +4,10 @@
 *	OpenCode plugin — lightweight maintenance of opencode's SQLite DB
 *	(~/.local/share/opencode/opencode.db). Runs on startup in a nested Worker
 *	off the backend event loop (workerData marker, never parentPort, to avoid
-*	a double run). Verifies integrity, prunes sessions inactive > prune_days
+*	a double run). Verifies integrity, prunes sessions inactive > data_keep_days
 *	(ON DELETE CASCADE removes all their tables; event_sequence is swept
 *	explicitly), refreshes stats, and compacts (VACUUM +
-*	WAL truncate) only when the DB is at least vacuum_min_gb; a small DB skips
+*	WAL truncate) only when the DB is at least vacuum_at_gb; a small DB skips
 *	VACUUM but still truncates the WAL (also on a no-prune run). Safe while
 *	opencode is live (WAL).
 *
@@ -18,14 +18,14 @@
 *	@example ~/.config/opencode/db-prunetor.jsonc
 *	{
 *		"enabled": true,             // master switch
-*		"prune_days": 30,            // delete sessions inactive > N days (and all their data)
-*		// "db_path":                // optional override; auto-detected if omitted
-*		"vacuum_min_gb": 1,          // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
+*		"data_keep_days": 30,        // delete sessions inactive > N days (and all their data)
+*		// "store_path":             // optional override db path; auto-detected if omitted
+*		"vacuum_at_gb": 1,           // only VACUUM when db file >= N GB; 0 = always vacuum after a prune
 *		"log_level": "info",         // "silent" | "error" | "info" | "debug"
 *	}
 *
 *	@name db-prunetor
-*	@version 1.1.29
+*	@version 1.1.30
 *	@author Alejandro Carraretto
 *	@assistant Hy3
 *	@license AGPL-3.0
@@ -49,11 +49,11 @@ const LOG_FILE    = join( CONFIG_DIR, "db-prunetor.log" ) ;
 
 const CONFIG : Config =
 {
-	enabled       : true,
-	prune_days    : 30,
-	db_path       : resolveDbPath(),
-	log_level     : "info",
-	vacuum_min_gb : 1,
+	enabled        : true,
+	data_keep_days : 30,
+	store_path     : resolveDbPath(),
+	log_level      : "info",
+	vacuum_at_gb   : 1,
 } ;
 
 const LOG_LEVEL =
@@ -69,10 +69,10 @@ const LOG_LEVEL =
 interface Config
 {
 	enabled        : boolean ;
-	prune_days     : number ;
-	db_path        : string ;
+	data_keep_days : number ;
+	store_path     : string ;
 	log_level      : "silent" | "error" | "info" | "debug" ;
-	vacuum_min_gb  : number ;
+	vacuum_at_gb   : number ;
 }
 
 interface PruneWorkerData
@@ -111,8 +111,8 @@ function loadConfig() : Config
 
 	Object.assign( CONFIG, file ) ;
 
-	CONFIG.prune_days = Math.max( 1, CONFIG.prune_days ) ;
-	CONFIG.db_path    = file.db_path ? resolvePath( String( file.db_path ) ) : resolveDbPath() ;
+	CONFIG.data_keep_days = Math.max( 1, CONFIG.data_keep_days ) ;
+	CONFIG.store_path     = file.store_path ? resolvePath( String( file.store_path ) ) : resolveDbPath() ;
 
 	log( LOG_LEVEL.INFO, loaded ? "Config loaded" : "Config loaded (defaults)" ) ;
 
@@ -285,7 +285,7 @@ class DbPrunetor
 	// may run several instances sharing one DB over WAL; a closing instance
 	// must not block or fail while siblings are live. VACUUM runs with a short
 	// busy_timeout so a busy DB (another instance) fails fast and defers
-	// instead of blocking; gated by vacuum_min_gb, so a small DB skips VACUUM
+	// instead of blocking; gated by vacuum_at_gb, so a small DB skips VACUUM
 	// and just refreshes stats + truncates the WAL.
 	protected compact() : void
 	{
@@ -295,11 +295,11 @@ class DbPrunetor
 
 			const dbBytes  = ( () =>
 			{
-				try { return statSync( this.config.db_path ).size ; }
+				try { return statSync( this.config.store_path ).size ; }
 				catch { return 0 ; }
 			} )() ;
 
-			const threshold = this.config.vacuum_min_gb * 1024 * 1024 * 1024 ;
+			const threshold = this.config.vacuum_at_gb * 1024 * 1024 * 1024 ;
 
 			if ( threshold > 0 && dbBytes < threshold )
 			{
@@ -320,10 +320,10 @@ class DbPrunetor
 		}
 	}
 
-	// Log database / wal / shm sizes (emitted after a real VACUUM)
+	// Log database / wal / shm sizes (emitted after a real prune)
 	protected report() : void
 	{
-		const dbPath = this.config.db_path ;
+		const dbPath = this.config.store_path ;
 
 		log( LOG_LEVEL.INFO,
 			`Report — db: ${ fileSize( dbPath ) }, ` +
@@ -392,7 +392,7 @@ class DbPrunetor
 	// only in the finally, so every early return leaves no residue behind.
 	public async run() : Promise<void>
 	{
-		const dbPath = this.config.db_path ;
+		const dbPath = this.config.store_path ;
 		const lock   = dbPath + ".prune.lock" ;
 
 		let completed = false ;
@@ -419,7 +419,7 @@ class DbPrunetor
 			if ( ! this.acquireLock( lock ) ) return ;
 			locked = true ;
 
-			const deleted = this.prune( this.config.prune_days ) ;
+			const deleted = this.prune( this.config.data_keep_days ) ;
 
 			if ( deleted === 0 )
 			{
