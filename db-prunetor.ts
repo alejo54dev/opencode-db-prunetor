@@ -169,7 +169,7 @@ function resolveDbPath() : string
 
 	if ( env )
 	{
-		if ( env === ":memory:" || isAbsolute( env ) ) return env ;
+		if ( env == ":memory:" || isAbsolute( env ) ) return env ;
 
 		return join( dataDir(), env ) ;
 	}
@@ -247,7 +247,7 @@ class DbPrunetor
 	protected integrityOk() : boolean
 	{
 		const rows = this.db!.prepare( "PRAGMA integrity_check" ).all() as Array<{ integrity_check : string }> ;
-		const ok   = rows.length > 0 && rows.every( r => r.integrity_check === "ok" ) ;
+		const ok   = rows.length > 0 && rows.every( r => r.integrity_check == "ok" ) ;
 
 		if ( ok )
 			log( LOG_LEVEL.INFO, "Integrity check: ok" ) ;
@@ -400,7 +400,7 @@ class DbPrunetor
 
 		try
 		{
-			if ( dbPath === ":memory:" )
+			if ( dbPath == ":memory:" )
 			{
 				log( LOG_LEVEL.INFO, "In-memory database — skipping" ) ;
 				return ;
@@ -460,7 +460,7 @@ class DbPrunetor
 // when that marker is present. The nested Worker keeps the synchronous VACUUM
 // off opencode's backend event loop, so startup never freezes.
 const wd = workerData as PruneWorkerData ;
-const IS_PRUNE_WORKER = wd?.dbPrunetorRole === "prune" ;
+const IS_PRUNE_WORKER = wd?.dbPrunetorRole == "prune" ;
 
 if ( IS_PRUNE_WORKER )
 {
